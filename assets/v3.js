@@ -6,78 +6,78 @@
 'use strict';
 
 /* ============ A. roles & small helpers ============ */
-/* Live role set (same as 2.10): super_admin, admin, hod, kitchen, boat, staff (+ assistant HOD). Shared Chef / Boat STATION
- * logins run in parallel; only the superadmin switch-over (stations_exclusive) makes chef / boat tools station-only. */
-const V3_ROLE_LABEL = { super_admin:'Superadmin', admin:'Admin', hod:'HOD', kitchen:'Kitchen', boat:'Boat', staff:'Staff', chef:'Kitchen', boat_manager:'Boat' };
-const V3_ROLE_FILTERS = ['super_admin','admin','hod','kitchen','boat','staff'];
-/** Assignable permissions (same values the live 2.x Users screen writes). */
-const V3_PERM_OPTIONS = [['staff','Staff'],['hod','HOD'],['assistant_hod','Assistant HOD'],['chef','Kitchen (chef)'],['boat_manager','Boat manager'],['boat_captain','Boat captain'],['admin','Admin'],['super_admin','Superadmin']];
-const V3_STATION_LABEL = { chef:'Chef', boat:'Boat' };
-const V3_STATION_TABS = { chef:['chef','kitchen','chefreq','chefmenu','chefcomments','chefreports','special','station','snapshots'], boat:['stboat','boat','station'] };
-const V3_STATION_LANDING = { chef:'chef', boat:'stboat' };
-/** '' for a personal account, else 'chef' / 'boat' (signed in with the shared station login on this device). */
-function v3Station(u){ u = u || state.user; return (u && u.station && V3_STATION_LABEL[u.station]) ? u.station : ''; }
-/** Station set up yet (password saved by the superadmin)? */
-function v3StationReady(k){ const r = v3Home().stationsReady; return !!(r && r[k]); }
-/** After the superadmin switch-over, chef / boat tools are station-only (+ superadmin). Default OFF: old setup in parallel. */
-function v3Exclusive(){ return !!v3Home().stationsExclusive; }
-function v3LegacyStation(u){
-  u = u || state.user; if (!u || v3Station(u)) return '';
-  const p = userPerms(u);
-  if (p.includes('chef') || p.includes('kitchen')) return 'chef';
-  if (p.includes('boat_manager') || p.includes('boat_captain') || p.includes('boat')) return 'boat';
-  return '';
-}
+/* 3.0.0 role model: everyone uses the normal staff layout (Home / Meals / Boat / More). Roles only add buttons in More:
+ * admin → Admin Settings · chef/kitchen → Kitchen Admin · boat manager/captain → Boat Admin · HOD / assistant HOD → Department Admin.
+ * The superadmin keeps its own Dashboard / Approvals / Manage / More layout. Role pages need a signed session (v3. token). */
+const V3_ROLE_LABEL = { super_admin:'Superadmin', admin:'Admin', hod:'HOD', assistant_hod:'Assistant HOD', chef:'Chef', kitchen:'Chef', boat_manager:'Boat manager', boat_captain:'Boat captain', boat:'Boat manager', staff:'Staff' };
+const V3_ROLE_FILTERS = ['super_admin','admin','hod','assistant_hod','chef','boat_manager','boat_captain','staff'];
+/** Assignable roles (multi-select). staff is implied. */
+const V3_PERM_OPTIONS = [['hod','HOD'],['assistant_hod','Assistant HOD'],['chef','Chef / Kitchen'],['boat_manager','Boat manager'],['boat_captain','Boat captain'],['admin','Admin'],['super_admin','Superadmin']];
+const V3_BUTTONS = { admin:{ tab:'adminhub', icon:'fa-user-shield', label:'Admin Settings', sub:'Users & roles, leave, reminders, reports' },
+  kitchen:{ tab:'kitchenadmin', icon:'fa-fire-burner', label:'Kitchen Admin', sub:'Lists, menus, requests, meal times' },
+  boat:{ tab:'boatadmin', icon:'fa-anchor', label:'Boat Admin', sub:'Runs, passengers, emergency travel' },
+  dept:{ tab:'deptadmin', icon:'fa-people-group', label:'Department Admin', sub:'Approvals, staff, updates, leave' } };
+/* stations were removed in 3.0.0 — kept as no-op stubs so older helpers stay safe */
+function v3Station(){ return ''; }
+function v3Exclusive(){ return false; }
 const V3_LEAVE_TYPES = ['Day off','Annual leave','Sick sheet','Other'];
 const V3_MEALS = ['breakfast','lunch','dinner'];
 const V3_MEAL_LABEL = { breakfast:'Breakfast', lunch:'Lunch', dinner:'Dinner' };
 const V3_MEAL_ICON = { breakfast:'fa-mug-saucer', lunch:'fa-bowl-food', dinner:'fa-moon' };
 
 function v3Truthy(v){ return v === true || v === 'TRUE' || v === 'true' || v === 1 || v === '1'; }
+/** Every role the account holds (permissions + roles column + assistant HOD flag). */
+function v3Perms(u){
+  u = u || state.user; if (!u) return ['staff'];
+  const out = userPerms(u).map(function(x){ return x === 'kitchen' ? 'chef' : (x === 'boat' ? 'boat_manager' : x); });
+  const extra = Array.isArray(u.roles) ? u.roles : String(u.roles || '').split(/[,|\s]+/);
+  extra.forEach(function(r){ r = String(r||'').trim(); if (r === 'kitchen') r = 'chef'; if (r === 'boat') r = 'boat_manager'; if (r && out.indexOf(r) < 0) out.push(r); });
+  if (v3Truthy(u.assistantHod) && out.indexOf('assistant_hod') < 0) out.push('assistant_hod');
+  return out.length ? out : ['staff'];
+}
+function v3Has(r, u){ return v3Perms(u).indexOf(r) >= 0; }
+/** Role buttons for the More tab: ['admin','kitchen','boat','dept'] (same rule as Release3.gs roleButtons). */
+function v3Buttons(u){
+  u = u || state.user;
+  if (u && Array.isArray(u.roleButtons)) return u.roleButtons.slice();
+  const p = v3Perms(u), b = [];
+  if (p.includes('admin') || p.includes('super_admin')) b.push('admin');
+  if (p.includes('chef')) b.push('kitchen');
+  if (p.includes('boat_manager') || p.includes('boat_captain')) b.push('boat');
+  if (p.includes('hod') || p.includes('assistant_hod')) b.push('dept');
+  return b;
+}
 function v3RoleOf(u){
-  u = u || state.user; if (!u) return 'staff';
-  const p = userPerms(u);
+  const p = v3Perms(u);
   if (p.includes('super_admin')) return 'super_admin';
   if (p.includes('admin')) return 'admin';
   if (p.includes('hod')) return 'hod';
-  if (p.includes('chef') || p.includes('kitchen')) return 'kitchen';
-  if (p.includes('boat_manager') || p.includes('boat_captain') || p.includes('boat')) return 'boat';
+  if (p.includes('chef')) return 'chef';
+  if (p.includes('boat_manager')) return 'boat_manager';
+  if (p.includes('boat_captain')) return 'boat_captain';
   return 'staff';
 }
 function v3Home(){ return cachePeek('v3home') || {}; }
-function v3IsAsst(u){ u = u || state.user; return !!u && (v3Truthy(u.assistantHod) || userPerms(u).includes('assistant_hod')); }
-function v3IsAdmin(){ const r = v3RoleOf(); return r === 'admin' || r === 'super_admin'; }
-function v3IsSuper(){ return v3RoleOf() === 'super_admin'; }
-function v3IsLead(){ return v3RoleOf() === 'hod' || v3IsAsst(); }
-/** Signed in as the Chef station, or a personal kitchen account (until the switch-over). */
-function v3IsChef(){ return v3Station() === 'chef' || (!v3Station() && !v3Exclusive() && v3LegacyStation() === 'chef'); }
-/** Chef page access: Chef station, superadmin, or (until the switch-over) personal kitchen / admin accounts. */
-function v3CanChef(){
-  const st = v3Station(); if (st) return st === 'chef';
-  if (v3IsSuper()) return true;
-  return !v3Exclusive() && (v3LegacyStation() === 'chef' || v3IsAdmin());
-}
+function v3IsAsst(u){ return v3Has('assistant_hod', u); }
+function v3IsSuper(){ return v3Has('super_admin'); }
+function v3IsAdmin(){ return v3IsSuper() || v3Has('admin'); }
+function v3IsLead(){ return v3Has('hod') || v3IsAsst(); }
+function v3IsChef(){ return v3Has('chef'); }
+/** Kitchen Admin pages: chef, admin, superadmin (server: isChefPerm). */
+function v3CanChef(){ return v3IsChef() || v3IsAdmin(); }
 function v3CanDept(){ return v3IsLead() || v3IsAdmin(); }
-function v3DeptStatus(){
-  const h = v3Home();
-  if (h.deptStatus) return h.deptStatus;
-  const s = String((state.user && state.user.deptStatus) || '').toLowerCase();
-  return s || 'approved';
-}
-function v3DeptOk(){ return v3IsAdmin() || v3DeptStatus() === 'approved'; }
-/** Boat page access: Boat station, superadmin, or (until the switch-over) personal boat / admin accounts. */
-function v3HasBoat(){
-  const st = v3Station(); if (st) return st === 'boat';
-  if (v3IsSuper()) return true;
-  return !v3Exclusive() && (v3LegacyStation() === 'boat' || v3IsAdmin());
-}
+function v3DeptStatus(){ return 'approved'; } // 3.0.0: no department join approval
+function v3DeptOk(){ return true; }
+/** Boat Admin: boat manager / captain, admin, superadmin. */
+function v3HasBoat(){ return v3Has('boat_manager') || v3Has('boat_captain') || v3IsAdmin(); }
+function v3IsBoatManager(){ return v3Has('boat_manager') || v3IsAdmin(); }
 function v3RoleLabel(u){
-  u = u || state.user;
-  if (v3Station(u)) return V3_STATION_LABEL[v3Station(u)] + ' station';
-  const r = v3RoleOf(u);
-  return (V3_ROLE_LABEL[r] || 'Staff') + (r !== 'hod' && r !== 'admin' && r !== 'super_admin' && v3IsAsst(u) ? ' · Assistant HOD' : '');
+  const p = v3Perms(u).filter(function(x){ return x !== 'staff'; });
+  if (!p.length) return 'Staff';
+  const order = ['super_admin','admin','hod','assistant_hod','chef','boat_manager','boat_captain'];
+  return order.filter(function(r){ return p.includes(r); }).map(function(r){ return V3_ROLE_LABEL[r]; }).join(' · ');
 }
-/** Role counts chips on the Users page (from getUsers roleCounts; no seat limits — people can hold more than one permission). */
+/** Role counts chips on the Users page (from getUsers roleCounts; people can hold more than one role). */
 const V3_ROLE_COUNT_KEYS = [['super_admin','Superadmin'],['admin','Admin'],['hod','HOD'],['assistant_hod','Assistant HOD'],['chef','Kitchen'],['boat_manager','Boat manager'],['boat_captain','Boat captain'],['staff','Staff only'],['inactive','Inactive']];
 function v3RoleCountChips(rc){
   if (!rc) return '';
@@ -85,17 +85,22 @@ function v3RoleCountChips(rc){
     return '<div class="rounded-xl border border-slate-700/60 bg-slate-900/50 p-2 min-w-0" data-rolecount="'+k[0]+'"><p class="text-[10px] text-slate-400 truncate">'+esc(k[1])+'</p><p class="text-sm font-semibold text-slate-100">'+(rc[k[0]]||0)+'</p></div>';
   }).join('')+'</div>';
 }
+/** Role pages only work in role mode (Kitchen / Boat / Department / Admin page), never on the plain staff tabs. */
+function v3InRoleMode(){ return !!state._roleMode; }
 
-/* overrides of 2.x permission helpers (same names, 3.0 meaning) */
+/* overrides of 2.x permission helpers (same names, 3.0.0 meaning). The Boat / Kitchen 2.x screens only show role tools
+ * when opened from a role page (state._roleMode), so the staff Boat tab is the normal staff view for everyone. */
 canHod = function(){ return v3CanDept(); };
 canKitchen = function(){ return v3CanChef(); };
-canBoatManager = function(){ return v3HasBoat(); };
-canBoatCaptain = function(){ return v3HasBoat(); };
-roleLabel = function(r){ return ({ super_admin:'Superadmin', admin:'Admin', hod:'HOD', assistant_hod:'Assistant HOD', chef:'Chef', kitchen:'Chef', boat_manager:'Boat manager', boat_captain:'Boat manager', boat:'Boat manager', staff:'Staff' })[r] || r; };
+canBoatManager = function(){ return v3InRoleMode() && v3IsBoatManager(); };
+canBoatCaptain = function(){ return v3InRoleMode() && v3HasBoat(); };
+roleLabel = function(r){ return V3_ROLE_LABEL[r] || r; };
 
 function v3Esc(s){ return esc(s); }
 function v3Page(inner, id){ return '<div class="fade-in max-w-lg mx-auto space-y-4 pb-6 min-w-0"'+(id?' id="'+id+'"':'')+'>'+inner+'</div>'; }
-function v3Card(inner, extra){ return '<section class="glass rounded-2xl p-4 space-y-3 min-w-0 '+(extra||'')+'">'+inner+'</section>'; }
+/** Card; the optional 2nd argument is the section id (a value with spaces is treated as extra classes). */
+function v3Card(inner, extra){ extra = extra || ''; const isId = extra && !/\s/.test(extra);
+  return '<section'+(isId?' id="'+extra+'"':'')+' class="glass rounded-2xl p-4 space-y-3 min-w-0 '+(isId?'':extra)+'">'+inner+'</section>'; }
 function v3Title(icon, text, right){
   return '<div class="flex items-center justify-between gap-2 min-w-0"><h3 class="v3-section-title"><i class="fa-solid '+icon+' text-teal-400 mr-2"></i>'+text+'</h3>'+(right||'')+'</div>';
 }
@@ -216,8 +221,8 @@ function v3Form(title, fields, submitLabel, onSubmit, intro){
 const V3_SHEET_KEYS = { 'Users':'users', 'Breakfast Orders':'breakfastOrders', 'Lunch Orders':'lunchOrders', 'Dinner Orders':'dinnerOrders', 'Leave Requests':'leaveRequests',
   'Menu Votes':'menuVotes', 'Chef Feedback':'chefFeedback', 'Dept Updates':'deptUpdates', 'Dept Update Activity':'deptActivity', 'Boat Runs':'boatRuns',
   'Boat Bookings':'boatBookings', 'Suggestions':'suggestions', 'Reminders':'reminders', 'Notifications':'notifications', 'Dinner Menus':'dinnerMenus',
-  'Station Log':'stationLog', 'Emergency Travel':'emergencyTravel', 'Meal Snapshots':'orderSnapshots', 'Role Backup':'roleBackup' };
-/* demo crypto: synchronous SHA-256 / HMAC-SHA256 (same results as Apps Script Utilities) so station passwords are hashed in demo too */
+  'Emergency Travel':'emergencyTravel', 'Role Changes':'roleChanges', 'Dinner Prep Snapshots':'dinnerSummaries' };
+/* demo crypto: synchronous SHA-256 / HMAC-SHA256 (same results as Apps Script Utilities) so demo session tokens match the server */
 const V3Crypto = (function(){
   const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
     0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
@@ -267,6 +272,8 @@ function v3ParsePerms(u){
   if (Array.isArray(u.permissions)) list = u.permissions.map(String);
   else if (u.permissions !== undefined && u.permissions !== null && String(u.permissions).trim() !== '') list = String(u.permissions).split(/[,|]+/).map(function(s){ return s.trim(); }).filter(Boolean);
   if (!list.length && u.role) list = [u.role === 'kitchen' ? 'chef' : u.role === 'boat' ? 'boat_manager' : String(u.role)];
+  String(u.roles || '').split(/[,|\s]+/).forEach(function(r){ r = r.trim(); if (r && list.indexOf(r) < 0) list.push(r); });
+  if (v3Truthy(u.assistantHod) && list.indexOf('assistant_hod') < 0) list.push('assistant_hod');
   return list.length ? list : ['staff'];
 }
 function v3DemoShim(){
@@ -281,10 +288,14 @@ function v3DemoShim(){
     updateRowById: function(n, id, patch){ const r = v3DemoRows(n).find(function(x){ return String(x.id) === String(id); }); if (!r) return null; Object.assign(r, patch); return copy(r); },
     findOrder: function(n, id){ return copy(v3DemoRows(n).find(function(x){ return String(x.id) === String(id); }) || null); },
     findUserByEmail: function(e){ e = String(e||'').trim().toLowerCase(); return copy(v3DemoRows('Users').find(function(u){ return String(u.email).toLowerCase() === e; }) || null); },
-    getRequester: function(p){ if (p && p._stationUser) return p._stationUser; const e = String(p.requesterEmail || '').trim().toLowerCase(); return e ? S.findUserByEmail(e) : null; },
+    getRequester: function(p){ const e = String((p && p.requesterEmail) || '').trim().toLowerCase(); return e ? S.findUserByEmail(e) : null; },
+    pad2: function(n){ return (n < 10 ? '0' : '') + n; },
+    scInvalidateSheet: function(){}, SpreadsheetApp: { flush: function(){} },
+    dsumSaveSnapshot: function(d, auto, kind, by){ const row = { id: uid('dps'), serviceDate: d, generatedAt: formatFiji(), autoGenerated: !!auto, kind: kind || 'auto', generatedBy: by || '' }; v3DemoRows('Dinner Prep Snapshots').push(row); return row; },
+    dsumTryPdf: function(){ return { ok:false, error:'demo' }; },
     getSetting: function(k, fb){ const v = (V3DB.db.appSettings||{})[k]; return v === undefined || v === '' ? (fb === undefined ? '' : String(fb)) : String(v); },
     setSetting: function(k, v){ const db = V3DB.db; if (!db.appSettings) db.appSettings = {}; db.appSettings[k] = String(v); },
-    stationsExclusive: function(){ return String(S.getSetting('stations_exclusive', 'false')).toLowerCase() === 'true'; },
+    stationsExclusive: function(){ return false; },
     ALL_PERMISSIONS: ['super_admin','admin','hod','assistant_hod','chef','boat_manager','boat_captain','staff'],
     permissionsToString: function(list){ return (list||[]).join(','); },
     primaryRoleFromPermissions: function(list){ list = list || []; const o = ['super_admin','admin','hod','assistant_hod','chef','boat_manager','boat_captain','staff']; for (const r of o) if (list.includes(r)) return r; return 'staff'; },
@@ -317,7 +328,7 @@ function v3DemoShim(){
     truthy: v3Truthy, uid: uid, userPermissions: v3ParsePerms,
     isAdminPerm: function(u){ const p = v3ParsePerms(u); return p.includes('super_admin') || p.includes('admin'); },
     isSuperPerm: function(u){ return v3ParsePerms(u).includes('super_admin'); },
-    isChefPerm: function(u){ if (!u) return false; if (u.station) return u.station === 'chef'; const p = v3ParsePerms(u); if (p.includes('super_admin')) return true; if (S.stationsExclusive()) return false; return p.includes('chef') || p.includes('kitchen') || p.includes('admin'); },
+    isChefPerm: function(u){ if (!u) return false; const p = v3ParsePerms(u); return p.includes('chef') || p.includes('kitchen') || p.includes('admin') || p.includes('super_admin'); },
     scKey: function(a,b){ return a+'|'+b; }, scGetJson: function(){ return null; }, scPutJson: function(){}, scBump: function(){},
     withIdempotency: function(a, p, fn){ return fn(p); },
     getSS: function(){ return { getSheetByName: function(){ return {}; } }; }, ensureSheet: function(){}, ensureColumns: function(){},
@@ -352,7 +363,6 @@ async function v3DemoRun(fn){
   V3DB.db = db;
   let out;
   try {
-    if (db.stationSeedPending) { Object.keys(V3_DEMO_STATIONS).forEach(function(k){ if (!srv.stationConfigured(k)) srv.stationSetPassword(k, V3_DEMO_STATIONS[k].username, V3_DEMO_STATIONS[k].password, 'demo seed'); }); delete db.stationSeedPending; }
     out = fn(srv, db);
   } finally { V3DB.db = null; }
   saveDemo(db);
@@ -369,6 +379,9 @@ publicUser = function(u){
   const asst = v3Truthy(u.assistantHod) || perms.includes('assistant_hod');
   const ds = String(u.deptStatus || '').trim().toLowerCase() || 'approved';
   pu.role3 = v3RoleOf({ permissions: perms });
+  pu.roles = perms.filter(function(x){ return x !== 'staff'; }).map(function(x){ return x === 'kitchen' ? 'chef' : (x === 'boat' ? 'boat_manager' : x); });
+  pu.roleButtons = v3Buttons({ permissions: perms, roles: pu.roles });
+  pu.isSuper = perms.includes('super_admin');
   pu.assistantHod = asst; pu.deptStatus = ds; pu.deptApproved = ds === 'approved';
   pu.createdAt = u.createdAt || '';
   return pu;
@@ -393,31 +406,9 @@ demoApiCore = async function(action, p){
   if (action === 'reviewLeave') { action = 'decideLeave'; p = Object.assign({}, p, { decision: p.decision || p.status || p.action }); }
   // 3.0 actions: the generated server module
   Object.keys(p).forEach(function(k){ if (k.charAt(0) === '_') delete p[k]; }); // never trust client "_" fields (same as the server)
-  // 3.0 stations — login with a station username, then the same gates as Code.gs bindRequestIdentity
-  if (action === 'login') { const st = await v3DemoRun(function(srv){ return srv.stationLogin(p.email, p.password); }); if (st) return st; }
-  const tok = String(state.token || '');
-  if (tok.indexOf('st1.') === 0 && !['login','getVersion','health','register','requestPasswordReset','resetPassword','verifyEmail','requestVerification'].includes(action)) {
-    const g = await v3DemoRun(function(srv){
-      const v = srv.stationVerifyToken(tok);
-      if (!v) return { success:false, authRequired:true, error:'This station was signed out (password changed or "sign out all devices") — sign in again.' };
-      const q = Object.assign({}, p); const e = srv.stationBindRequest(action, q, v.key);
-      if (e) return Object.assign({ success:false }, e);
-      return { q: q };
-    });
-    if (!g.q) { if (g.authRequired && state.user) setTimeout(sessionExpired, 0); return g; }
-    const q = g.q;
-    let res = await v3DemoRun(function(srv){ return srv.routeV3(action, q) || srv.routeStations(action, q) || srv.routeSnapshots(action, q); });
-    if (res === null || res === undefined) res = await v3DemoStationCore(action, q);
-    if (res && res.success && q._actor) await v3DemoRun(function(srv, d){ srv.stationLogWrite(q, action, res); v3DemoTagRow(d, action, q, srv.requesterTag(q._stationUser)); });
-    return res;
-  }
   delete p.actorName;
-  const meRow = me ? loadDemo().users.find(function(u){ return u.email === me; }) : null;
-  if (meRow) {
-    const gate = await v3DemoRun(function(srv){ return srv.stationPersonalGate(action, Object.assign({}, meRow)); });
-    if (gate) return { success:false, error: gate, stationOnly:true };
-  }
-  const v3 = await v3DemoRun(function(srv){ const q = Object.assign({}, p, { requesterEmail: me || p.requesterEmail }); return srv.routeV3(action, q) || srv.routeStations(action, q) || srv.routeSnapshots(action, q); });
+  if (me && action !== 'login') await v3DemoRun(function(srv){ try { srv.mealTick(false); } catch (e) {} }); // same lazy tick as the server (cutoff approve + late auto-approve)
+  const v3 = await v3DemoRun(function(srv){ const q = Object.assign({}, p, { requesterEmail: me || p.requesterEmail }); return srv.routeV3(action, q) || srv.routeRelease3(action, q); });
   if (v3 !== null && v3 !== undefined) return v3;
   const db = loadDemo();
   const meU = db.users.find(function(u){ return u.email === me; });
@@ -436,7 +427,7 @@ demoApiCore = async function(action, p){
       if (r && r.success) {
         // same extra fields as the live server (v3UserOut + role counts for admins)
         const extra = await v3DemoRun(function(srv, d){
-          const by = {}; d.users.forEach(function(u){ const o = srv.v3UserOut(Object.assign({}, u)); by[u.email] = { legacyStation: o.legacyStation, warnings: o.warnings }; });
+          const by = {}; d.users.forEach(function(u){ const o = srv.v3UserOut(Object.assign({}, u)); const roles = srv.userRoles(Object.assign({}, u)); by[u.email] = { warnings: o.warnings, roles: roles, roleButtons: srv.roleButtons(roles) }; });
           return { by: by, roleCounts: srv.v3RoleCounts(d.users.map(function(u){ return Object.assign({}, u); })) };
         });
         r.data.users = r.data.users.map(function(u){ return Object.assign({}, u, extra.by[u.email] || {}); });
@@ -471,15 +462,7 @@ demoApiCore = async function(action, p){
       return _v2DemoApiCore(action, p);
     case 'register': {
       const r = await _v2DemoApiCore(action, p);
-      if (r && r.success) {
-        const email = String(p.email||'').toLowerCase().trim();
-        await v3DemoRun(function(srv, d){
-          const u = d.users.find(function(x){ return x.email === email; });
-          if (u) { u.deptStatus = 'pending'; u.assistantHod = false; }
-          srv.deptLeads(p.department).forEach(function(l){ srv.v3Notify(l.email, 'Join request: '+(p.firstName||'')+' '+(p.lastName||''), 'Wants to join '+p.department+'. Open More → Department staff to accept or decline.', 'dept_join', u && u.id); });
-        });
-        r.data = Object.assign({}, r.data, { deptPending: true, delivery: 'email' });
-      }
+      if (r && r.success) r.data = Object.assign({}, r.data, { delivery: 'email' }); // 3.0.0: no department join approval
       return r;
     }
     case 'placeLunchOrder': case 'placeBreakfastOrder': {
@@ -514,29 +497,13 @@ demoApiCore = async function(action, p){
   return _v2DemoApiCore(action, p);
 };
 
-/** Station requests that are not 3.0 module actions run on the 2.x demo core (its checks use the station's page permissions). */
-async function v3DemoStationCore(action, q){
-  if (action === 'cancelBoatBooking' || action === 'dedupeBoatRuns' || action === 'saveBoatRun' || action === 'deleteBoatRun' || action === 'reviewEmergencyTravel') {
-    if (v3Station() !== 'boat') return { success:false, error:'Boat station (or superadmin) only' };
-  }
-  if (action === 'markOrderStatus' && ['prepared','served','ordered'].indexOf(String(q.status || 'prepared')) < 0) return { success:false, error:'status must be prepared, served or ordered' };
-  return _v2DemoApiCore(action, q);
-}
-/** "…By" columns for station writes (same fields as the server). */
-function v3DemoTagRow(db, action, q, tag){
-  const at = formatFiji();
-  const find = function(list){ return (list || []).find(function(x){ return String(x.id) === String(q.id); }); };
-  if (action === 'markOrderStatus') { const list = q.meal === 'lunch' ? db.lunchOrders : (q.meal === 'breakfast' ? db.breakfastOrders : db.dinnerOrders); const o = find(list); if (o) { o.statusBy = tag; o.statusAt = at; } }
-  if (action === 'cancelBoatBooking') { const b = find(db.boatBookings); if (b) b.cancelledBy = tag; }
-  if (action === 'reviewEmergencyTravel') { const r = find(db.emergencyTravel); if (r) r.reviewedBy = tag; }
-  if (action === 'saveBoatRun') { const r = q.id ? find(db.boatRuns) : (db.boatRuns || [])[db.boatRuns.length - 1]; if (r) { if (!q.id) r.createdBy = tag; r.updatedBy = tag; } }
-}
 const _v2DemoBootstrap = demoBootstrap;
 demoBootstrap = async function(p){
   const r = await _v2DemoBootstrap(p);
   try {
     const me = v3DemoMe();
     r.data.v3 = await v3DemoRun(function(srv, db){ const u = db.users.find(function(x){ return x.email === me; }); return u ? srv.getV3Home(Object.assign({}, u)) : null; });
+    r.data.mealTimes = await v3DemoRun(function(srv){ return srv.mealTimesOut(); });
     if (r.data.user) r.data.user = publicUser(loadDemo().users.find(function(x){ return x.email === me; }));
   } catch (e) { console.warn('demo v3 home', e); }
   return r;
@@ -544,9 +511,7 @@ demoBootstrap = async function(p){
 
 /* demo seed for every 3.0 role (runs once per demo database) */
 const V3_DEMO_SEED = 'v3seed-3';
-/** Demo station logins (documented in CHANGELOG / tools/tests/README): Chef = chef / kitchen2026 · Boat = boat / boatcrew2026. Stored hashed like the server. */
-const V3_DEMO_STATIONS = { chef: { username:'chef', password:'kitchen2026' }, boat: { username:'boat', password:'boatcrew2026' } };
-/** seed-3: station logins + Kitchen / Boatman staff for the "Who's doing this?" picker + a few station-page samples. */
+/** seed-3: Kitchen / Boatman staff + a few Kitchen / Boat Admin samples. */
 function v3SeedDemo3(db){
   const addU = function(u){ if (!db.users.some(function(x){ return x.email === u.email; })) db.users.push(Object.assign({ id: uid('usr'), password:'staff123', contact:'', roster:'', village:'Resort', active:true, verified:true, deptStatus:'approved', createdAt: formatFiji() }, u)); };
   addU({ email:'vikash.kitchen@paradisecoveresortfiji.com', firstName:'Vikash', lastName:'Chand', department:'Kitchen', role:'staff', permissions:'staff' });
@@ -554,12 +519,11 @@ function v3SeedDemo3(db){
   addU({ email:'seru.boat@paradisecoveresortfiji.com', firstName:'Seru', lastName:'Nakau', department:'Boatman', role:'staff', permissions:'staff' });
   addU({ email:'tevita.boat@paradisecoveresortfiji.com', firstName:'Tevita', lastName:'Lomu', department:'Boatman', role:'staff', permissions:'staff' });
   addU({ email:'paradisecove679@gmail.com', firstName:'Test', lastName:'Test', department:'Maintenance', role:'chef', permissions:'staff,chef' });
-  // an allergy note + an emergency travel request so the station pages have something to show
+  // an allergy note + an emergency travel request so the Kitchen / Boat Admin pages have something to show
   const tom = fijiDateString(addFijiDays(getFijiNow(),1));
   const d = (db.dinnerOrders||[]).find(function(o){ return String(o.serviceDate) === tom && o.status !== 'cancelled' && !o.specialNote; });
   if (d) { d.specialNote = 'Allergy: peanuts'; d.notes = 'Allergy: peanuts'; }
   db.emergencyTravel = (db.emergencyTravel||[]).concat([{ id: uid('em'), userEmail:'ana.tui@paradisecoveresortfiji.com', userName:'Ana Tui', department:'Housekeeping', reason:'Family emergency in Nadi', seats:1, preferredTime:'ASAP', status:'pending', reviewedBy:'', reviewNote:'', createdAt: formatFiji() }]);
-  db.stationSeedPending = true; // hashed on first use (the demo server module loads async)
 }
 /** seed-2: 3.0 review cases — HOD who is also captain, assistant HOD who is also captain, HOD in department "Other"; codes by email. */
 function v3SeedDemo2(db){
@@ -642,9 +606,12 @@ loadDemo = function(){
 const _v2ApplyBootstrap = applyBootstrap;
 applyBootstrap = function(d){
   if (d && d.v3) { try { cacheSet('v3home', d.v3); } catch (e) {} }
-  if (d && d.v3 && d.user) d.user = Object.assign({}, d.user, { assistantHod: d.v3.assistantHod, deptStatus: d.v3.deptStatus, deptApproved: d.v3.deptApproved });
+  const mt = (d && (d.mealTimes || (d.v3 && d.v3.mealTimes))) || null;
+  if (mt) { state.mealTimes = mt; try { localStorage.setItem('pcrtest_v3_mealtimes', JSON.stringify(mt)); } catch (e) {} }
+  if (d) { state.rolesNeedSignIn = !!d.rolesNeedSignIn; state.heldRoles = d.heldRoles || null; }
   return _v2ApplyBootstrap(d);
 };
+try { const mt0 = JSON.parse(localStorage.getItem('pcrtest_v3_mealtimes') || 'null'); if (mt0 && mt0.times) state.mealTimes = mt0; } catch (e) {}
 repaintAfterBootstrap = function(){
   if (!state.user) return;
   // repaint read-only screens with fresh data; never a form the user may be typing in
@@ -658,38 +625,63 @@ function v3HomeTyping(){
 const _v2CacheInvalidateMealBoat = cacheInvalidateMealBoat;
 cacheInvalidateMealBoat = function(){ try { _v2CacheInvalidateMealBoat(); } finally { cacheInvalidate(['v3home']); } };
 
+/* 3.0.0 session: role pages need the signed token from login. When it is missing / expired the server answers
+ * sessionExpired or needsSignIn — the app then asks for the password again (the account itself stays signed in as staff). */
+function onAuthProblem(json, action){
+  if (json.sessionExpired) { saveToken(''); state.rolesNeedSignIn = true; }
+  if (json.needsSignIn) state.rolesNeedSignIn = true;
+  if (state._reauthOpen || state.demo) return;
+  if (json.sessionExpired || (json.needsSignIn && state._roleMode)) setTimeout(v3AskReauth, 50);
+}
+function v3AskReauth(){
+  if (state._reauthOpen || !state.user) return;
+  state._reauthOpen = true;
+  openModal('<div class="space-y-3 min-w-0" id="reauth-modal"><h3 class="font-semibold text-slate-100"><i class="fa-solid fa-lock text-teal-400 mr-2"></i>Sign in again</h3>'+
+    '<p class="text-xs text-slate-300">For your role pages (Kitchen, Boat, Department or Admin) please confirm your password. Normal staff pages keep working.</p>'+
+    '<p class="text-[11px] text-slate-400 break-all">'+esc(state.user.email)+'</p>'+
+    '<input id="reauth-pw" type="password" class="ui-input w-full" autocomplete="current-password" placeholder="Password"/>'+
+    '<div class="flex gap-2"><button type="button" id="reauth-cancel" class="flex-1 rounded-xl py-2.5 text-sm border border-slate-600 text-slate-300">Later</button>'+
+    '<button type="button" id="reauth-go" class="flex-1 btn-primary rounded-xl py-2.5 text-sm font-semibold text-white">Sign in</button></div></div>');
+  const done = function(){ state._reauthOpen = false; closeModal(); };
+  $('#reauth-cancel').onclick = done;
+  $('#reauth-go').onclick = async function(){
+    const pw = $('#reauth-pw').value; if (!pw) { toast('Enter your password','error'); return; }
+    this.disabled = true;
+    let r = null; try { r = await api('login', { email: state.user.email, password: pw }); } catch (e) {}
+    this.disabled = false;
+    if (!r || !r.success) { toast((r && r.error) || 'Sign-in failed','error'); return; }
+    saveToken(r.data.token || ''); state.user = Object.assign({}, state.user, r.data.user); saveSession();
+    state.rolesNeedSignIn = false; done(); toast('Signed in — role pages unlocked','ok');
+    cacheInvalidate(['v3home']); state.bootPending = loadBootstrap(); navigate(state.tab || 'more');
+  };
+}
+
 /* ============ D. navigation ============ */
 navItems = function(){
-  const st = v3Station();
-  if (st === 'chef') return [
-    { id:'chef', icon:'fa-gauge-high', label:'Dashboard' }, { id:'kitchen', icon:'fa-list-ol', label:'Orders' },
-    { id:'chefreq', icon:'fa-inbox', label:'Requests' }, { id:'chefmenu', icon:'fa-pen-to-square', label:'Menu' }, { id:'station', icon:'fa-ellipsis', label:'More' }];
-  if (st === 'boat') return [
-    { id:'stboat', icon:'fa-ship', label:'Bookings' }, { id:'boat', icon:'fa-calendar-days', label:'Runs' }, { id:'station', icon:'fa-ellipsis', label:'More' }];
-  const r = v3RoleOf();
-  if (r === 'super_admin') return [
+  if (v3IsSuper()) return [
     { id:'home', icon:'fa-gauge-high', label:'Dashboard' }, { id:'approvals', icon:'fa-inbox', label:'Approvals' },
     { id:'manage', icon:'fa-sliders', label:'Manage' }, { id:'more', icon:'fa-ellipsis', label:'More' }];
-  const items = [{ id:'home', icon:'fa-house', label:'Home' }, { id:'meals', icon:'fa-utensils', label:'Meals' }];
-  if (v3IsChef()) items.push({ id:'chef', icon:'fa-fire-burner', label:'Chef' }); // personal kitchen account (old setup, until the switch-over)
-  items.push({ id:'boat', icon:'fa-ship', label:'Boat' });
-  if (r === 'admin') items.push({ id:'manage', icon:'fa-sliders', label:'Manage' });
-  items.push({ id:'more', icon:'fa-ellipsis', label:'More' });
-  return items;
+  return [{ id:'home', icon:'fa-house', label:'Home' }, { id:'meals', icon:'fa-utensils', label:'Meals' },
+    { id:'boat', icon:'fa-ship', label:'Boat' }, { id:'more', icon:'fa-ellipsis', label:'More' }];
 };
-const V3_TAB_PARENT = { breakfast:'meals', lunch:'meals', dinner:'meals', myorders:'more', history:'more', leave:'more', profile:'more', notifications:'more', bookings:'more',
-  deptstaff:'more', deptupdates:'more', chefreq:'chef', chefcomments:'chef', chefreports:'chef', chefmenu:'chef', kitchen:'chef', usersv3:'manage', reminders:'manage',
-  adminstatus:'manage', leavecal:'more', settings:'manage', admin:'manage', suggestions:'manage', users:'manage', special:'meals', approvals:'approvals', stations:'manage', snapshots: 'manage' };
+/* role pages (opened from More) and the tab they belong to */
+const V3_ROLE_TABS = {
+  kitchenadmin:'kitchen', kitchen:'kitchen', chefreq:'kitchen', chefmenu:'kitchen', chefcomments:'kitchen', mealtimes:'kitchen', mealstats:'kitchen', special:'kitchen', offmenu:'kitchen',
+  boatadmin:'boat', boatruns:'boat', emergency:'boat',
+  deptadmin:'dept', approvals:'dept', deptstaff:'dept', deptupdatespost:'dept', leavecal:'dept', leavesummary:'dept', mealbehalf:'dept',
+  adminhub:'admin', usersv3:'admin', users:'admin', reminders:'admin', suggestions:'admin', adminstatus:'admin', settings:'admin', admin:'admin', manage:'admin', migrate:'admin'
+};
+const V3_TAB_PARENT = { breakfast:'meals', lunch:'meals', dinner:'meals', myorders:'more', history:'more', leave:'more', profile:'more', notifications:'more', bookings:'more', deptupdates:'more', schedule:'more' };
 renderNav = function(targetSel){
   const items = navItems(), ids = items.map(function(n){ return n.id; });
-  let active = ids.includes(state.tab) ? state.tab : (V3_TAB_PARENT[state.tab] || 'more');
-  if (v3Station() && state.tab === 'special') active = 'chef';
-  if (!ids.includes(active)) active = v3Station() ? 'station' : 'more';
+  let active = ids.includes(state.tab) ? state.tab : (V3_TAB_PARENT[state.tab] || (v3IsSuper() && V3_ROLE_TABS[state.tab] ? 'manage' : 'more'));
+  if (state.tab === 'approvals' && ids.includes('approvals')) active = 'approvals';
+  if (!ids.includes(active)) active = 'more';
   const el = $(targetSel || '#bottom-nav'); if (!el) return;
-  const h = v3Home(), hb = h.hodBar || {}, sd = h.superDash && h.superDash.pending;
+  const h = v3Home(), sd = h.superDash && h.superDash.pending;
   const badge = function(id){
-    if (id === 'approvals' && sd) { const n = (sd.leaveHod||0)+(sd.leaveMgmt||0)+(sd.late||0)+(sd.special||0)+(sd.joins||0); return n; }
-    if (id === 'chef' && h.chef) return (h.chef.pending.late||0)+(h.chef.pending.special||0);
+    if (id === 'approvals' && sd) return (sd.leaveHod||0)+(sd.leaveMgmt||0)+(sd.late||0)+(sd.special||0);
+    if (id === 'more') return state._v3Unread || 0;
     return 0;
   };
   el.innerHTML = items.map(function(n){
@@ -700,55 +692,49 @@ renderNav = function(targetSel){
   $$((targetSel || '#bottom-nav')+' .nav-item').forEach(function(b){ b.onclick = function(){ navigate(b.dataset.tab); }; });
 };
 canPrivilegedTab = function(tab){
-  const st = v3Station();
-  if (st) return V3_STATION_TABS[st].indexOf(tab) >= 0; // a station login only ever sees its own page
-  if (tab === 'station') return false;
-  const need = {
-    stboat: v3HasBoat, stations: v3IsSuper, snapshots: function(){ return v3CanChef() || v3IsAdmin(); },
-    kitchen: v3CanChef, chef: v3CanChef, chefreq: function(){ return v3CanChef() || v3IsLead(); }, chefcomments: v3CanChef, chefreports: v3CanChef, chefmenu: v3CanChef,
-    deptstaff: v3CanDept, special: function(){ return v3CanDept() || v3CanChef(); },
-    manage: v3IsAdmin, usersv3: v3IsAdmin, users: v3IsAdmin, reminders: v3IsAdmin, adminstatus: v3IsAdmin, suggestions: v3IsAdmin, leavecal: v3CanDept,
-    settings: v3IsSuper, approvals: function(){ return v3IsAdmin() || v3IsLead() || v3CanChef(); },
-    admin: v3IsSuper
-  }[tab];
-  return need ? !!need() : true;
+  const kind = V3_ROLE_TABS[tab];
+  if (tab === 'approvals' && v3IsSuper()) return true;
+  if (!kind) return true;
+  if (kind === 'kitchen') return v3CanChef();
+  if (kind === 'boat') return v3HasBoat();
+  if (kind === 'dept') return v3CanDept();
+  if (kind === 'admin') return (tab === 'settings' || tab === 'admin' || tab === 'migrate') ? v3IsSuper() : v3IsAdmin();
+  return true;
 };
 roleLandingTab = function(){
-  if (v3Station()) {
-    const h0 = (location.hash||'').replace(/^#/, '');
-    return h0 && canPrivilegedTab(h0) ? h0 : V3_STATION_LANDING[v3Station()];
-  }
-  try {
-    const h = (location.hash||'').replace(/^#/, '');
-    if (h && V3_TITLES[h] && canPrivilegedTab(h)) return h;
-  } catch (e) {}
+  try { const h = (location.hash||'').replace(/^#/, ''); if (h && V3_TITLES[h] && canPrivilegedTab(h)) return h; } catch (e) {}
   return 'home';
 };
-const V3_TITLES = { home:'Home', meals:'Meals', boat:'Boat', more:'More', bookings:'My boat bookings', profile:'My profile', history:'My history', leave:'Leave requests',
-  notifications:'Notifications', deptstaff:'Department staff', deptupdates:'Department updates', chef:'Chef', chefreq:'Late & special requests', chefcomments:'Food comments',
-  chefreports:'Meal reports', chefmenu:'Edit menu', kitchen:'Kitchen lists', manage:'Manage', usersv3:'Users', reminders:'Reminders', adminstatus:'Admin status & reports',
-  leavecal:'Leave calendar', users:'Staff directory (classic)', settings:'App settings', admin:'Classic admin tools', suggestions:'Suggestions', approvals:'Approvals', special:'Special meal order', schedule:'My schedule',
-  station:'Station', stboat:'Boat — bookings & passengers', stations:'Station logins', snapshots:'Meal summaries' };
+const V3_TITLES = { home:'Home', meals:'Meals', boat:'Boat', more:'More', bookings:'My boat bookings', profile:'My profile', history:'My orders & history', leave:'My leave',
+  notifications:'Notifications', deptstaff:'Department staff', deptupdates:'Department updates', chefreq:'Late & special requests', chefcomments:'Staff feedback',
+  chefmenu:'Dinner menus', kitchen:'Kitchen lists & summaries', manage:'Manage', usersv3:'Users & roles', reminders:'Reminders', adminstatus:'Reports & downloads',
+  leavecal:'Leave calendar', users:'Staff directory', settings:'App settings', admin:'Classic admin tools', suggestions:'Suggestions', approvals:'Approvals', special:'Special meal order', schedule:'My schedule',
+  kitchenadmin:'Kitchen Admin', boatadmin:'Boat Admin', deptadmin:'Department Admin', adminhub:'Admin Settings', mealtimes:'Meal times', mealstats:'Meal statistics', offmenu:'Orders not on the menu',
+  boatruns:'Boat runs (admin)', emergency:'Emergency travel', leavesummary:'Leave summary', mealbehalf:'Meal on behalf', migrate:'Role migration', deptupdatespost:'Department updates' };
 navigate = function(tab){
   if (tab === 'myorders') tab = 'history';
   if (tab === 'breakfast' || tab === 'lunch' || tab === 'dinner') { state.mealFocus = tab; tab = 'meals'; }
-  if (!canPrivilegedTab(tab)) { toast(v3Station() ? 'The '+V3_STATION_LABEL[v3Station()]+' station login only opens the '+V3_STATION_LABEL[v3Station()]+' page' : 'That area is not part of your role','error'); tab = v3Station() ? V3_STATION_LANDING[v3Station()] : 'home'; }
+  if (tab === 'chef') tab = 'kitchenadmin';
+  if (tab === 'stboat') tab = 'boatadmin';
+  if (!canPrivilegedTab(tab)) { toast('That area is not part of your role','error'); tab = 'home'; }
   if (tab === 'schedule' && !featureOn('feature_my_schedule')) { toast('My Schedule is off for now.','error'); tab = 'more'; }
   if (state._v3Timer) { clearInterval(state._v3Timer); state._v3Timer = null; }
   if (state._homeRemTimer) { clearInterval(state._homeRemTimer); state._homeRemTimer = null; }
   state.tab = tab;
+  state._roleMode = V3_ROLE_TABS[tab] || '';
+  if (tab === 'approvals' && !v3IsSuper()) state._roleMode = 'dept';
   const ht = $('#header-title'); if (ht) ht.textContent = V3_TITLES[tab] || tab;
   const sticky = $('#app-sticky'); if (sticky) sticky.classList.remove('hidden');
   const map = {
     home: renderHome, meals: renderMeals, boat: renderBoat, more: renderMore, bookings: renderMyBookings, profile: renderMyProfile, schedule: renderSchedule,
-    history: v3RenderHistory, leave: v3RenderLeave, notifications: v3RenderNotifications, deptstaff: v3RenderDeptStaff, deptupdates: v3RenderDeptUpdates,
-    chef: v3RenderChefHub, chefreq: v3RenderChefRequests, chefcomments: v3RenderChefComments, chefreports: v3RenderChefReports, chefmenu: v3RenderMenuEditor,
+    history: v3RenderHistory, leave: v3RenderLeave, notifications: v3RenderNotifications, deptstaff: v3RenderDeptStaff, deptupdates: v3RenderDeptUpdates, deptupdatespost: v3RenderDeptUpdates,
+    chefreq: v3RenderChefRequests, chefcomments: v3RenderChefComments, chefmenu: v3RenderMenuEditor,
     kitchen: renderKitchen, manage: v3RenderManage, usersv3: v3RenderUsers, users: renderUsers, reminders: v3RenderReminders, adminstatus: v3RenderAdminStatus, leavecal: v3RenderLeaveCalendar,
     settings: v3RenderSettings, admin: renderAdmin, suggestions: renderSuggestions, approvals: v3RenderApprovals, special: v3RenderSpecialPage,
-    station: v3RenderStationMore, stboat: v3RenderBoatStation, stations: v3RenderStationLogins, snapshots: v3RenderSnapshots
+    kitchenadmin: v3RenderKitchenAdmin, boatadmin: v3RenderBoatAdmin, deptadmin: v3RenderDeptAdmin, adminhub: v3RenderAdminHub, mealtimes: v3RenderMealTimes,
+    mealstats: v3RenderMealStats, offmenu: v3RenderOffMenu, boatruns: v3RenderBoatRuns, emergency: v3RenderEmergency, leavesummary: v3RenderLeaveSummary, mealbehalf: v3RenderMealBehalf, migrate: v3RenderMigrate
   };
-  if (['home','meals','boat','kitchen','stboat'].includes(tab)) paintSkeleton({ cards: 3 });
-  v3StationHeader();
+  if (['home','meals','boat','kitchen'].includes(tab)) paintSkeleton({ cards: 3 });
   try { history.replaceState(null, '', location.pathname + location.search + (tab === 'home' ? '' : '#'+tab)); } catch (e) {}
   const fn = map[tab] || renderHome;
   Promise.resolve().then(fn).catch(function(e){ console.error(e); toast('Could not open '+(V3_TITLES[tab]||tab),'error'); });
@@ -756,17 +742,30 @@ navigate = function(tab){
   renderDataStatus();
   const mc = $('#main-content'); if (mc) mc.scrollTop = 0;
   try { window.scrollTo(0, 0); } catch (e) {}
-  if (tab === 'home' && !v3Station()) setTimeout(prefetchNextTabByRole, 400);
+  if (tab === 'home') setTimeout(prefetchNextTabByRole, 400);
+  v3PollNotifications();
 };
+/** Unread notifications badge on More (at most one check a minute, never blocks a screen). */
+function v3PollNotifications(){
+  if (!state.user || state.tab === 'more' || state.tab === 'notifications') return;
+  if (state._v3UnreadAt && Date.now() - state._v3UnreadAt < 60000) return;
+  state._v3UnreadAt = Date.now();
+  setTimeout(function(){
+    api('getMyNotifications', {}).then(function(res){ if (res && res.success) { const n = res.data.unreadCount || 0; if (n !== state._v3Unread) { state._v3Unread = n; renderNav('#bottom-nav'); } } }).catch(function(){});
+  }, 1500);
+}
+/** Role-page header: back to the role dashboard. */
+function v3RoleBack(kind){
+  const b = V3_BUTTONS[kind]; if (!b) return v3Back('more','More');
+  return v3Back(b.tab, b.label);
+}
 
 /* ============ E. Home ============ */
+/** Countdown target for TOMORROW's meal: the cutoff (Kitchen Admin meal times), then the late-request window, else null (closed). */
 function v3CutoffTarget(meal){
-  const n = getFijiNow(), h = n.getUTCHours();
-  const at = function(hr){ const d = new Date(n.getTime()); d.setUTCHours(hr, 0, 0, 0); return d; };
-  if (meal === 'dinner') return h < 20 ? { t: at(20), label:'closes 8:00pm' } : null;
-  if (meal === 'lunch') return h < 13 ? { t: at(13), label:'closes 1:00pm' } : null;
-  if (h < 13) return { t: at(13), label:'closes 1:00pm' };
-  if (h < 18) return { t: at(18), label:'late request until 6:00pm', late:true };
+  const info = v3Info(meal), now = getFijiNow().getTime();
+  if (now < info.cutoffAt) return { t: new Date(info.cutoffAt), label: 'closes '+mtLabel(info.cutoff) };
+  if (now < info.lateCloseAt) return { t: new Date(info.lateCloseAt), label: 'late request until '+mtLabel(info.lateClose), late: true };
   return null;
 }
 function v3Countdown(ms){
@@ -778,7 +777,7 @@ function v3TickCountdowns(){
   $$('[data-cd]').forEach(function(el){
     const t = Number(el.getAttribute('data-cd'));
     const left = t - getFijiNow().getTime();
-    if (left <= 0) { el.textContent = 'Books closed'; el.classList.add('text-amber-300'); if (!state._v3ClosedRepaint) { state._v3ClosedRepaint = setTimeout(function(){ state._v3ClosedRepaint = null; if (['home','meals'].includes(state.tab) && !v3HomeTyping()) navigate(state.tab); }, 1500); } }
+    if (left <= 0) { el.textContent = 'Orders closed'; el.classList.add('text-amber-300'); if (!state._v3ClosedRepaint) { state._v3ClosedRepaint = setTimeout(function(){ state._v3ClosedRepaint = null; if (['home','meals'].includes(state.tab) && !v3HomeTyping()) navigate(state.tab); }, 1500); } }
     else el.textContent = v3Countdown(left);
   });
   const ck = $('#v3-clock'); if (ck) ck.textContent = formatFiji();
@@ -805,7 +804,6 @@ function v3MyMeal(meal, date){
 }
 /** 39: meals that close within the next hour and that I have not ordered (client clock, plus the server's list from getV3Home). */
 function v3CutoffReminderList(){
-  if (v3Station()) return [];
   const tom = fijiDateString(addFijiDays(getFijiNow(),1)), now = getFijiNow().getTime(), out = [];
   V3_MEALS.forEach(function(m){
     const cd = v3CutoffTarget(m); if (!cd || cd.late) return;
@@ -894,33 +892,24 @@ function v3OrdersGrid(){
       '<p class="text-[10px] uppercase tracking-wide text-slate-400"><i class="fa-solid '+V3_MEAL_ICON[m]+' mr-1"></i>'+V3_MEAL_LABEL[m]+'</p>'+
       '<p class="text-[11px] mt-1 min-w-0 truncate">'+(o ? (m==='dinner'&&o.mealChoice&&!isInactiveMealStatus(o.status) ? '<span class="font-medium text-slate-100">'+esc(o.mealChoice)+'</span>' : '') : '')+'</p>'+
       '<p class="mt-0.5">'+(o ? v3Status(o.status) : '<span class="text-[11px] text-slate-400">Not ordered</span>')+'</p>'+
-      '<p class="text-[10px] mt-1 '+(cd?(cd.late?'text-orange-300':'text-teal-300'):'text-amber-300')+'">'+(cd ? '<span data-cd="'+cd.t.getTime()+'" class="v3-countdown">'+v3Countdown(cd.t.getTime()-getFijiNow().getTime())+'</span><br><span class="text-slate-500">'+cd.label+'</span>' : 'Books closed')+'</p></button>';
+      '<p class="text-[10px] mt-1 '+(cd?(cd.late?'text-orange-300':'text-teal-300'):'text-amber-300')+'">'+(cd ? '<span data-cd="'+cd.t.getTime()+'" class="v3-countdown">'+v3Countdown(cd.t.getTime()-getFijiNow().getTime())+'</span><br><span class="text-slate-500">'+cd.label+'</span>' : 'Orders closed')+'</p></button>';
   }).join('');
   return '<section class="space-y-2 min-w-0" id="home-myorders">'+v3Title('fa-receipt','My orders · tomorrow '+esc(v3DateLabel(tom)==='Tomorrow'?WEEKDAY_NAMES[addFijiDays(getFijiNow(),1).getUTCDay()]:tom))+
     '<div class="grid grid-cols-3 gap-2" id="home-meal-grid">'+cards+'</div>'+
-    (anyClosed ? '<p class="text-[11px] text-amber-200/90 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2" id="home-books-closed"><i class="fa-solid fa-lock mr-1"></i>Books closed — contact your department HOD, chef or management for a late meal request.</p>' : '')+
+    (anyClosed ? '<p class="text-[11px] text-amber-200/90 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2" id="home-books-closed"><i class="fa-solid fa-lock mr-1"></i>Orders closed for some meals — use a Late Meal Request on the Meals page while the late window is open.</p>' : '')+
     '</section>';
 }
 function v3DoThisNow(){
-  const h = v3Home(), hb = h.hodBar || {};
-  let tiles = v3Tile(v3Nav('boat'),'fa-ship','Book a boat','Village runs') + v3Tile(v3Nav('bookings'),'fa-ticket','My bookings','Boat seats') +
-    v3Tile("v3OpenLeaveForm()",'fa-plane-departure','Request leave', v3DeptOk()?'Day off, annual, sick':'After HOD accepts you') + v3Tile(v3Nav('meals'),'fa-utensils','Meals','Order, late request, menu');
-  let extra = '';
-  if (v3CanDept()) extra += v3Tile(v3Nav('leave'),'fa-calendar-check','Leave requests','View all · decide', (hb.leave||0)+(hb.leaveMgmt||0)) +
-    v3Tile(v3Nav('approvals'),'fa-clock-rotate-left','Late meal requests','Department', hb.late||0) +
-    v3Tile(v3Nav('deptstaff'),'fa-user-plus','Join requests','Department staff', hb.joins||0) +
-    v3Tile(v3Nav('special'),'fa-star','Special meal order','No phone / contractor');
-  if (v3CanChef()) extra += v3Tile(v3Nav(v3IsChef()?'chef':'chefreq'), 'fa-fire-burner', v3IsChef()?'Chef tab':'Chef section', 'Lists, requests, reports', h.chef ? (h.chef.pending.late + h.chef.pending.special) : 0);
-  if (v3IsAdmin()) extra += v3Tile(v3Nav('manage'),'fa-sliders','Manage','Users, reminders, reports');
-  return '<section class="space-y-2 min-w-0" id="home-dothisnow">'+v3Title('fa-bolt','Do this now')+'<div class="grid grid-cols-2 gap-2">'+tiles+'</div>'+
-    (extra ? '<div class="grid grid-cols-2 gap-2 pt-1" id="home-lead-tiles">'+extra+'</div>' : '')+'</section>';
+  const tiles = v3Tile(v3Nav('meals'),'fa-utensils','Meals','Order, change, late request') + v3Tile(v3Nav('boat'),'fa-ship','Book a boat','Village runs') +
+    v3Tile("v3OpenLeaveForm()",'fa-plane-departure','Request leave','Day off, annual, sick') + v3Tile(v3Nav('history'),'fa-list-check','My orders','Meals, boats, leave');
+  return '<section class="space-y-2 min-w-0" id="home-dothisnow">'+v3Title('fa-bolt','Do this now')+'<div class="grid grid-cols-2 gap-2">'+tiles+'</div></section>';
 }
 function v3HodBar(){
   const hb = v3Home().hodBar; if (!hb) return '';
   const cell = function(tab, n, label, icon){ return '<button type="button" onclick="navigate(\''+tab+'\')" class="rounded-xl p-2.5 text-left border min-w-0 '+(n?'border-amber-400/40 bg-amber-500/10':'border-slate-700/70 bg-slate-900/40')+'">'+
     '<p class="text-xl font-semibold '+(n?'text-amber-200':'text-slate-300')+'">'+n+'</p><p class="text-[10px] text-slate-400 leading-tight"><i class="fa-solid '+icon+' mr-1"></i>'+label+'</p></button>'; };
-  const cells = cell('leave', hb.leave||0, 'Leave to review', 'fa-plane-departure') + cell('approvals', hb.late||0, 'Late meals', 'fa-clock') + cell('deptstaff', hb.joins||0, 'Join requests', 'fa-user-plus') +
-    (v3IsAdmin() ? cell('leave', hb.leaveMgmt||0, 'Final approval', 'fa-stamp') : '');
+  const cells = cell('approvals', hb.leave||0, 'Leave to review', 'fa-plane-departure') + cell('approvals', hb.late||0, 'Late meals', 'fa-clock') + cell('leavecal', hb.onLeaveToday||0, 'On leave today', 'fa-calendar-days') +
+    (v3IsAdmin() ? cell('approvals', hb.leaveMgmt||0, 'Final approval', 'fa-stamp') : '');
   return '<section class="glass rounded-2xl p-3 space-y-2 min-w-0" id="v3-hodbar">'+v3Title('fa-clipboard-check', v3IsAdmin() ? 'Waiting for you (all departments)' : 'Waiting for you · '+esc(state.user.department||''))+
     '<div class="grid '+(v3IsAdmin()?'grid-cols-4':'grid-cols-3')+' gap-2">'+cells+'</div></section>';
 }
@@ -952,7 +941,7 @@ function v3ChefDashCard(c){
   const t = c.totals || { today:{}, tomorrow:{} };
   const num = function(label, a){ return '<div class="rounded-xl bg-slate-900/50 border border-slate-700/60 p-2 text-center min-w-0"><p class="text-[10px] text-slate-400">'+label+'</p><p class="text-lg font-semibold text-slate-100">'+(a||0)+'</p></div>'; };
   const list = function(arr, key, tone){ return (arr||[]).length ? arr.map(function(x){ return '<div class="v3-row text-xs"><span class="truncate min-w-0">'+esc(x.dish)+'</span>'+v3Chip((key==='likes'?'<i class="fa-solid fa-thumbs-up"></i> ':'<i class="fa-solid fa-thumbs-down"></i> ')+x[key], tone)+'</div>'; }).join('') : v3Empty('No votes yet'); };
-  return '<section class="glass rounded-2xl p-4 space-y-3 min-w-0" id="v3-chefdash">'+v3Title('fa-fire-burner','Chef dashboard','<button type="button" onclick="navigate(\'chef\')" class="text-xs text-teal-300">Open Chef tab <i class="fa-solid fa-chevron-right"></i></button>')+
+  return '<section class="glass rounded-2xl p-4 space-y-3 min-w-0" id="v3-chefdash">'+v3Title('fa-fire-burner','Today & tomorrow')+
     '<p class="text-[10px] text-slate-400">Tomorrow ('+esc(c.tomorrow||'')+') — counted orders</p>'+
     '<div class="grid grid-cols-3 gap-2">'+num('Breakfast', t.tomorrow.breakfast)+num('Lunch', t.tomorrow.lunch)+num('Dinner', t.tomorrow.dinner)+'</div>'+
     '<p class="text-[10px] text-slate-400">Today: '+(t.today.breakfast||0)+' breakfast · '+(t.today.lunch||0)+' lunch · '+(t.today.dinner||0)+' dinner</p>'+
@@ -963,13 +952,13 @@ function v3ChefDashCard(c){
     '<div class="grid grid-cols-2 gap-3 min-w-0"><div class="space-y-1 min-w-0"><p class="text-[10px] text-slate-400">Most liked</p>'+list(c.liked,'likes','ok')+'</div><div class="space-y-1 min-w-0"><p class="text-[10px] text-slate-400">Most disliked</p>'+list(c.disliked,'dislikes','bad')+'</div></div>'+
     '<div class="space-y-1"><p class="text-[10px] text-slate-400">Orders per day (last 7 days incl. tomorrow)</p>'+v3WeeklyChart(c.weekly)+'</div></section>';
 }
-function v3DeptBanner(){
-  const s = v3DeptStatus();
-  if (v3DeptOk()) return '';
-  const txt = s === 'pending' ? 'Your request to join <strong>'+esc(state.user.department||'your department')+'</strong> is waiting for the HOD. Meals and boats work now; leave, late meal requests and department updates open once you are accepted.'
-    : (s === 'declined' ? 'Your department request was declined. Contact your HOD or admin to fix your department.' : 'You are not in a department yet. Contact admin.');
-  return '<div class="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100 min-w-0" id="v3-dept-banner"><i class="fa-solid fa-hourglass-half mr-1"></i>'+txt+'</div>';
+/** Role pages need the signed session: shown when the server says the token is missing / expired. */
+function v3SignInBanner(){
+  if (!state.rolesNeedSignIn || !v3Buttons().length || state.demo) return '';
+  return '<div class="rounded-2xl border border-sky-500/40 bg-sky-500/10 p-3 text-xs text-sky-100 min-w-0 flex items-center gap-2" id="v3-signin-banner"><i class="fa-solid fa-lock"></i><span class="flex-1 min-w-0">Sign in again to open your role pages ('+esc(v3Buttons().map(function(b){ return V3_BUTTONS[b].label; }).join(', '))+').</span>'+
+    '<button type="button" onclick="v3AskReauth()" class="shrink-0 rounded-lg px-3 py-1.5 border border-sky-400/50 text-sky-100">Sign in</button></div>';
 }
+function v3DeptBanner(){ return ''; }
 function v3DeptUpdatesBlock(list, compact){
   if (!v3DeptOk()) return '';
   list = list || [];
@@ -1039,9 +1028,7 @@ function renderHome(){
   if (v3IsSuper()) return v3RenderSuperHome();
   const h = v3Home();
   $('#main-content').innerHTML = v3Page(
-    v3GreetingCard() + v3CutoffBanner() + v3DeptBanner() + queueHostHtml('*') +
-    (v3CanDept() ? v3HodBar() : '') +
-    (v3IsChef() ? v3ChefDashCard(h.chef) : '') +
+    v3GreetingCard() + v3CutoffBanner() + v3SignInBanner() + queueHostHtml('*') +
     v3OrdersGrid() + v3DoThisNow() +
     v3DeptUpdatesBlock(h.deptUpdates, true) +
     v3SuggestionBox() + v3RemindersStrip() +
@@ -1200,7 +1187,7 @@ async function v3RenderLeaveCalendar(){
   $$('.lc-day').forEach(function(b){ b.onclick = function(){ $('#lc-list').innerHTML = listHtml(on(b.dataset.ds), v3DateLabel(b.dataset.ds)) + '<button type="button" id="lc-all" class="text-xs text-teal-300">Show the whole month</button>'; $('#lc-all').onclick = function(){ $('#lc-list').innerHTML = listHtml(rows, 'This month'); }; }; });
 }
 
-/* ============ G. Meals (one page) ============ */
+/* ============ G. Meals (one page: my status, dinner, lunch, breakfast, feedback) ============ */
 const V3_ORDER_ACTION = { breakfast:'placeBreakfastOrder', lunch:'placeLunchOrder', dinner:'placeDinnerOrder' };
 const V3_GET_ACTION = { breakfast:'getBreakfastOrders', lunch:'getLunchOrders', dinner:'getDinnerOrders' };
 function v3Info(meal){ return meal === 'breakfast' ? breakfastCutoffInfo() : (meal === 'lunch' ? lunchCutoffInfo() : dinnerCutoffInfo()); }
@@ -1213,92 +1200,121 @@ async function v3FetchMeal(meal, force){
   cacheSet(key, rows);
   return rows;
 }
-async function v3FetchMenu(force){
-  const di = dinnerCutoffInfo(), key = 'dinnerMenus:'+di.serviceDate;
+/** Dinner menu for one dinner date (weekday of THAT date only). Default: tomorrow. */
+async function v3FetchMenu(force, date){
+  const sd = date || dinnerCutoffInfo().serviceDate, key = 'dinnerMenus:'+sd;
   if (!force && cacheGet(key)) return cachePeek(key);
-  const m = await api('getDinnerMenus', { serviceDate: di.serviceDate, includePreviousDay:false });
+  const m = await api('getDinnerMenus', { serviceDate: sd, includePreviousDay:false });
   const pack = (m && m.data) || {};
   cacheSet(key, pack);
   return pack;
 }
-function v3MenuItems(pack){
-  pack = pack || cachePeek('dinnerMenus:'+dinnerCutoffInfo().serviceDate) || {};
+function v3MenuItems(pack, date){
+  pack = pack || cachePeek('dinnerMenus:'+(date || dinnerCutoffInfo().serviceDate)) || {};
   const items = Array.isArray(pack) ? pack : (pack.serviceItems || pack.items || []);
   return items.map(function(it){ return String(it.itemName || it.name || ''); }).filter(Boolean);
 }
-function v3StatusBlock(){
-  const today = fijiDateString(), tom = fijiDateString(addFijiDays(getFijiNow(),1)), yest = fijiDateString(addFijiDays(getFijiNow(),-1));
-  let rows = (v3Home().myMeals || []).slice();
-  // tomorrow: the freshest copy is the per-meal list
-  V3_MEALS.forEach(function(m){ const c = v3MealRows(m); if (Array.isArray(c)) { rows = rows.filter(function(o){ return !(o.meal === m && String(o.serviceDate).slice(0,10) === tom); }).concat(c.map(function(o){ return Object.assign({ meal:m }, o); })); } });
-  rows = rows.filter(function(o){ const d = String(o.serviceDate).slice(0,10); return d >= yest && d <= tom; });
-  rows.sort(function(a,b){ return (String(b.serviceDate)+String(b.createdAt)).localeCompare(String(a.serviceDate)+String(a.createdAt)); });
-  const line = function(o){
-    return '<div class="flex items-start gap-2 py-2 border-b border-slate-700/40 last:border-0 min-w-0">'+
-      '<i class="fa-solid '+V3_MEAL_ICON[o.meal]+' text-teal-400 w-4 mt-0.5 text-center"></i><div class="flex-1 min-w-0">'+
-      '<div class="v3-row"><p class="text-xs text-slate-100 truncate min-w-0">'+esc(V3_MEAL_LABEL[o.meal])+' · '+esc(v3DateLabel(String(o.serviceDate).slice(0,10)))+(o.meal==='dinner'&&o.mealChoice?' · <span class="font-semibold">'+esc(o.mealChoice)+'</span>':'')+'</p>'+v3Status(o.status)+'</div>'+
-      '<p class="text-[10px] text-slate-500">Ordered '+esc(v3Ts(o.createdAt))+(o.orderType==='late_request'?' · late request':'')+(o.cancelReason?' · cancelled: '+esc(o.cancelReason):'')+(kitchenNoteOf(o)?' · note: '+esc(kitchenNoteOf(o)):'')+'</p></div></div>';
-  };
-  const cancelInfo = ['breakfast','lunch'].map(function(m){ const n = v3CancelsUsed(m); return V3_MEAL_LABEL[m]+' cancels '+n+'/3'; }).join(' · ');
-  return '<section class="glass rounded-2xl p-4 space-y-1 min-w-0" id="meal-status">'+v3Title('fa-list-check','My meal orders')+'<p class="text-[10px] text-slate-400">Tomorrow: '+esc(cancelInfo)+'</p>'+
-    (rows.length ? rows.map(line).join('') : v3Empty('No meal orders from yesterday to tomorrow yet.'))+'</section>';
+function v3DayDate(d){ const p = String(d).slice(0,10).split('-'); const dt = new Date(Date.UTC(+p[0], +p[1]-1, +p[2])); return WEEKDAY_NAMES[dt.getUTCDay()].slice(0,3)+' '+(+p[2])+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+p[1]-1]; }
+function v3Today(){ return fijiDateString(); }
+function v3Tom(){ return fijiDateString(addFijiDays(getFijiNow(),1)); }
+function v3PhaseOf(meal, date){ return mealPhaseC(meal, date); }
+function v3MealRowsFor(meal, date){
+  if (date === v3Info(meal).serviceDate) { const c = v3MealRows(meal); if (Array.isArray(c)) return c.map(function(o){ return Object.assign({ meal: meal }, o); }); }
+  return (v3Home().myMeals || []).filter(function(o){ return o.meal === meal && String(o.serviceDate).slice(0,10) === date; });
 }
-function v3ClosedBox(meal){
-  return '<div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2"><p class="text-sm text-amber-200"><i class="fa-solid fa-lock mr-1"></i>Books closed</p>'+
-    '<p class="text-[11px] text-amber-100/80">Contact your department HOD, chef or management for a late meal request.</p>'+
-    (v3DeptOk() ? '<button type="button" class="v3-go-late text-xs text-teal-300 underline" data-meal="'+meal+'">Send a late meal request</button>' : '')+'</div>';
+function v3CurOrder(meal, date){ const rows = v3MealRowsFor(meal, date).filter(function(o){ return !isInactiveMealStatus(o.status); }); return rows[rows.length-1] || null; }
+
+/* Section 1: my meal dashboard */
+function v3MealDash(){
+  const today = v3Today(), tom = v3Tom(), n = getFijiNow();
+  const cell = function(meal, date){
+    const o = v3CurOrder(meal, date), ph = v3PhaseOf(meal, date);
+    return '<div class="text-[11px] min-w-0">'+(o ? (meal === 'dinner' && o.mealChoice ? '<span class="block truncate text-slate-100">'+esc(o.mealChoice)+'</span>' : '')+v3Status(o.status)
+      : (ph === 'open' ? '<span class="text-teal-300">Open</span>' : (ph === 'late' ? '<span class="text-orange-300">Late request</span>' : '<span class="text-slate-500">Not ordered</span>')))+'</div>';
+  };
+  const row = function(meal){
+    const cd = v3CutoffTarget(meal);
+    return '<div class="grid grid-cols-[5.5rem_1fr_1fr] gap-2 items-start py-1.5 border-b border-slate-700/40 last:border-0"><span class="text-xs text-slate-300"><i class="fa-solid '+V3_MEAL_ICON[meal]+' text-teal-400 mr-1"></i>'+V3_MEAL_LABEL[meal]+'</span>'+cell(meal, today)+
+      '<div class="min-w-0">'+cell(meal, tom)+'<p class="text-[10px] '+(cd?(cd.late?'text-orange-300':'text-teal-300'):'text-amber-300')+'">'+(cd?'<span data-cd="'+cd.t.getTime()+'" class="v3-countdown">'+v3Countdown(cd.t.getTime()-n.getTime())+'</span> · '+esc(cd.label):'Orders closed')+'</p></div></div>';
+  };
+  // next meal served
+  const h = n.getUTCHours(), nextMeal = h < 9 ? ['breakfast', today] : (h < 14 ? ['lunch', today] : (h < 21 ? ['dinner', today] : ['breakfast', tom]));
+  const no = v3CurOrder(nextMeal[0], nextMeal[1]);
+  const menu = v3MenuItems(null, tom);
+  return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="meal-dash">'+v3Title('fa-gauge','My meals')+
+    '<div class="grid grid-cols-[5.5rem_1fr_1fr] gap-2 text-[10px] uppercase tracking-wide text-slate-500"><span></span><span>Today</span><span>Tomorrow</span></div>'+
+    V3_MEALS.map(row).join('')+
+    '<div class="rounded-xl bg-slate-900/50 border border-slate-700/60 p-2.5 text-xs space-y-1" id="meal-next"><p><span class="text-slate-400">Next meal:</span> <strong class="text-slate-100">'+V3_MEAL_LABEL[nextMeal[0]]+' · '+esc(v3DateLabel(nextMeal[1]))+'</strong> '+(no ? v3Status(no.status) : '<span class="text-slate-500">not ordered</span>')+'</p>'+
+    '<p><span class="text-slate-400">Tomorrow\'s dinner menu:</span> <span class="text-slate-200">'+(menu.length ? menu.map(esc).join(' · ') : '—')+'</span></p></div></section>';
+}
+
+/* late request form (inline) — meal + date fixed */
+function v3LateForm(meal, date){
+  const id = meal+'-'+date;
+  const items = meal === 'dinner' ? v3MenuItems(null, date) : [];
+  const lateClose = mealWindowC(meal, date).lateCloseAt;
+  return '<div class="rounded-xl border border-orange-500/30 bg-orange-500/10 p-3 space-y-2" data-late="'+id+'">'+
+    '<p class="text-xs text-orange-200"><i class="fa-solid fa-clock mr-1"></i>Late Meal Request · '+V3_MEAL_LABEL[meal]+' '+esc(v3DateLabel(date))+'. Open until <strong>'+esc(mtLabel(mealTimesNow()['late_close_'+meal]))+'</strong> (<span data-cd="'+lateClose+'" class="v3-countdown">'+v3Countdown(lateClose-getFijiNow().getTime())+'</span>) — then it is approved automatically.</p>'+
+    (meal === 'dinner' ? '<label class="text-[10px] text-slate-400" for="late-dish-'+id+'">Dish ('+esc(v3DateLabel(date))+'\'s menu)</label>'+(items.length ? '<select id="late-dish-'+id+'" class="ui-input w-full">'+items.map(function(x){ return '<option>'+esc(x)+'</option>'; }).join('')+'</select>' : '<input id="late-dish-'+id+'" class="ui-input w-full" maxlength="80" value="Standard"/>') : '')+
+    '<label class="text-[10px] text-slate-400" for="late-reason-'+id+'">Reason *</label><input id="late-reason-'+id+'" class="ui-input w-full" maxlength="300" placeholder="e.g. came back on the late boat"/>'+
+    mealNoteInputHtml('late-note-'+id,'')+
+    '<button type="button" class="v3-late-send btn-primary w-full rounded-xl py-2.5 text-sm font-semibold text-white" data-meal="'+meal+'" data-date="'+date+'">Send Late Meal Request</button></div>';
+}
+function v3OrderLine(o, meal){
+  return '<div class="v3-row text-xs"><span class="text-slate-300 min-w-0 truncate">'+(meal==='dinner'?'Your dinner: <strong class="text-slate-100">'+esc(o.mealChoice)+'</strong>':'You are counted in')+'</span>'+v3Status(o.status)+'</div>'+myNoteLine(o)+
+    (o.status === 'late_pending' ? '<p class="text-[10px] text-orange-200">Approved automatically at '+esc(mtLabel(mealTimesNow()['late_close_'+meal]))+'.</p>' : '');
 }
 function v3MealCard(meal){
-  const info = v3Info(meal), rows = v3MealRows(meal) || [];
-  const active = rows.filter(function(o){ return !isInactiveMealStatus(o.status); });
-  const cur = active[active.length-1] || null;
-  const st = cur && cur.status;
+  const info = v3Info(meal), tom = info.serviceDate, today = v3Today(), rows = v3MealRows(meal) || [];
+  const cur = v3CurOrder(meal, tom);
   const used = rows.filter(function(o){ return o.status === 'cancelled' && o.orderType !== 'special'; }).length;
   const blocked = meal !== 'dinner' && used >= 3 && !cur;
-  const cd = v3CutoffTarget(meal);
   const idp = meal === 'breakfast' ? 'bf' : (meal === 'lunch' ? 'lu' : 'dinner');
   const noteId = meal === 'dinner' ? 'dinner-notes' : idp+'-note';
-  let body = '';
-  const statusLine = cur ? '<div class="v3-row text-xs"><span class="text-slate-300 min-w-0 truncate">'+(meal==='dinner'?'Your dinner: <strong class="text-slate-100">'+esc(cur.mealChoice)+'</strong>':'You are counted in')+'</span>'+v3Status(st)+'</div>'+myNoteLine(cur) : '';
+  const ph = v3PhaseOf(meal, tom);
+  let tonight = '';
   if (meal === 'dinner') {
-    const items = v3MenuItems();
-    const opts = (items.length ? items : ['Standard','Vegetarian']).map(function(n){ return '<option'+(cur && cur.mealChoice === n ? ' selected' : '')+'>'+esc(n)+'</option>'; }).join('');
-    if (info.open) {
-      body = statusLine + '<label class="text-[10px] text-slate-400" for="dinner-choice">Choose from tomorrow\'s menu</label><select id="dinner-choice" class="ui-input w-full">'+opts+'</select>'+
+    const t = v3CurOrder('dinner', today), tph = v3PhaseOf('dinner', today);
+    tonight = '<div class="rounded-xl bg-slate-900/50 border border-slate-700/60 p-3 space-y-2" id="dinner-tonight"><p class="v3-section-title">Tonight · '+esc(v3DayDate(today))+'</p>'+
+      (t ? v3OrderLine(t, 'dinner') : (tph === 'late' ? v3LateForm('dinner', today) : '<p class="text-xs text-slate-400">No dinner ordered for tonight. '+(tph === 'closed' ? 'Late requests closed at '+esc(mtLabel(mealTimesNow().late_close_dinner))+' — please see the chef.' : '')+'</p>'))+'</div>';
+  }
+  let body = '';
+  if (blocked) {
+    body = '<div class="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-100" id="'+idp+'-blocked"><i class="fa-solid fa-ban mr-1"></i>You cancelled '+V3_MEAL_LABEL[meal].toLowerCase()+' for '+esc(v3DateLabel(tom))+' 3 times, so it is locked. Contact your HOD or chef if you still need it.</div>';
+  } else if (ph === 'open') {
+    if (meal === 'dinner') {
+      const items = v3MenuItems(null, tom);
+      // only tomorrow's menu (the phone's "last dish" is never injected — 3.0.0 menu-day fix)
+      const opts = (items.length ? items : ['Standard']).map(function(n){ return '<option'+(cur && String(cur.mealChoice).trim().toLowerCase() === n.trim().toLowerCase() ? ' selected' : '')+'>'+esc(n)+'</option>'; }).join('');
+      body = (cur ? v3OrderLine(cur, 'dinner') : '')+'<label class="text-[10px] text-slate-400" for="dinner-choice">Choose from '+esc(v3DateLabel(tom))+'\'s menu ('+esc(WEEKDAY_NAMES[addFijiDays(getFijiNow(),1).getUTCDay()])+')</label><select id="dinner-choice" class="ui-input w-full">'+opts+'</select>'+
         mealNoteInputHtml('dinner-notes', cur ? kitchenNoteOf(cur) : '')+
-        '<button id="btn-dinner" class="btn-primary w-full rounded-xl py-3 text-base font-semibold text-white min-h-[48px]">'+(cur?'Change dinner':'Book dinner')+'</button>'+
+        '<button id="btn-dinner" class="btn-primary w-full rounded-xl py-3 text-base font-semibold text-white min-h-[48px]">'+(cur?'Change dinner':'Order dinner')+'</button>'+
         (cur ? '<button id="btn-dinner-cancel" class="w-full rounded-xl py-2 text-xs text-amber-300 border border-amber-500/30">Cancel dinner</button>' : '');
     } else {
-      body = statusLine + (cur ? '' : '<p class="text-xs text-slate-400">No dinner booked for tomorrow.</p>') +
-        '<div class="grid grid-cols-2 gap-2"><button id="btn-dinner" class="rounded-xl py-2.5 text-xs border border-slate-600 text-slate-300">'+(cur?'Change dinner':'Book dinner')+'</button>'+
-        '<button id="btn-dinner-cancel" class="rounded-xl py-2.5 text-xs border border-slate-600 text-slate-300">Cancel dinner</button></div><div id="dinner-closed-msg"></div>' + v3ClosedBox('dinner');
+      body = (cur ? v3OrderLine(cur, meal) : '') + mealNoteInputHtml(noteId, cur ? kitchenNoteOf(cur) : '')+
+        '<button id="btn-'+meal+'" class="btn-primary w-full rounded-xl py-3 text-base font-semibold text-white min-h-[48px]">'+(cur?'Update note':'Count me in')+'</button>'+
+        (cur ? '<button id="btn-'+meal+'-cancel" class="w-full rounded-xl py-2 text-xs text-amber-300 border border-amber-500/30">Cancel ('+used+' of 3 cancels used)</button>' : (used ? '<p class="text-[10px] text-slate-400">'+used+' of 3 cancels used for this date.</p>' : ''));
     }
-  } else if (blocked) {
-    body = '<div class="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-100" id="'+idp+'-blocked"><i class="fa-solid fa-ban mr-1"></i>You cancelled '+V3_MEAL_LABEL[meal].toLowerCase()+' for '+esc(v3DateLabel(info.serviceDate))+' 3 times, so it is locked. Contact your HOD or chef if you still need it.</div>';
-  } else if (info.open) {
-    body = statusLine + mealNoteInputHtml(noteId, cur ? kitchenNoteOf(cur) : '')+
-      '<button id="btn-'+meal+'" class="btn-primary w-full rounded-xl py-3 text-base font-semibold text-white min-h-[48px]">'+(cur?'Update note':'Count me in')+'</button>'+
-      (cur ? '<button id="btn-'+meal+'-cancel" class="w-full rounded-xl py-2 text-xs text-amber-300 border border-amber-500/30">Cancel ('+used+' of 3 cancels used)</button>' : (used ? '<p class="text-[10px] text-slate-400">'+used+' of 3 cancels used for this date.</p>' : ''));
-  } else if (meal === 'breakfast' && info.lateOpen) {
-    if (st === 'late_pending') body = statusLine + '<p class="text-[11px] text-orange-200">Late breakfast request sent — the chef decides before 6:00pm.</p><button id="btn-breakfast-cancel" class="w-full rounded-xl py-2 text-xs text-amber-300 border border-amber-500/30">Withdraw late request</button>';
-    else if (cur) body = statusLine;
-    else body = '<div class="rounded-xl border border-orange-500/30 bg-orange-500/10 p-3 space-y-2"><p class="text-xs text-orange-200"><i class="fa-solid fa-clock mr-1"></i>Normal breakfast closed at 1:00pm. Late requests until 6:00pm need the chef\'s OK.</p>'+
-      mealNoteInputHtml('bf-note','')+'<button id="btn-breakfast-late" class="btn-primary w-full rounded-xl py-3 text-sm font-semibold text-white">Request late breakfast</button></div>';
   } else {
-    body = statusLine + v3ClosedBox(meal);
+    body = (cur ? v3OrderLine(cur, meal) + (cur.status === 'late_pending' ? '<button id="btn-'+meal+'-cancel" class="w-full rounded-xl py-2 text-xs text-amber-300 border border-amber-500/30">Withdraw late request</button>' : '') : '')+
+      '<div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-200" id="'+meal+'-closed"><i class="fa-solid fa-lock mr-1"></i>Orders closed ('+esc(mtLabel(info.cutoff))+').'+(cur ? '' : (ph === 'late' ? ' You can still send a Late Meal Request.' : ' Late requests closed — please see the chef.'))+'</div>'+
+      (!cur && ph === 'late' ? (state._lateOpen === meal ? v3LateForm(meal, tom) : '<button type="button" class="v3-late-open w-full rounded-xl py-2.5 text-sm border border-orange-500/40 text-orange-200" data-meal="'+meal+'" id="btn-'+meal+'-late"><i class="fa-solid fa-clock mr-1"></i>Late Meal Request</button>') : '');
   }
+  const cd = v3CutoffTarget(meal);
+  const rule = meal === 'dinner' ? 'Order, change or cancel until '+mtLabel(info.cutoff)+' the day before · late requests until '+mtLabel(info.lateClose)+' on the day.'
+    : 'Order until '+mtLabel(info.cutoff)+' the day before · late requests until '+mtLabel(info.lateClose)+'.';
   return '<section class="glass rounded-2xl p-4 space-y-3 min-w-0" id="meal-card-'+meal+'">'+
-    '<div class="v3-row"><h3 class="font-semibold text-slate-100"><i class="fa-solid '+V3_MEAL_ICON[meal]+' text-teal-400 mr-2"></i>'+V3_MEAL_LABEL[meal]+' <span class="text-xs text-slate-400 font-normal">· '+esc(v3DateLabel(info.serviceDate))+'</span></h3>'+
-    '<span class="text-[10px] '+(cd?(cd.late?'text-orange-300':'text-teal-300'):'text-amber-300')+'">'+(cd?'<span data-cd="'+cd.t.getTime()+'" class="v3-countdown">'+v3Countdown(cd.t.getTime()-getFijiNow().getTime())+'</span> left':'Closed')+'</span></div>'+
-    '<p class="text-[10px] text-slate-400">'+(meal==='dinner'?'Order by 8:00pm today for tomorrow\'s dinner.':(meal==='lunch'?'Order by 1:00pm today for tomorrow\'s lunch.':'Order by 1:00pm today · late requests 1–6pm.'))+'</p>'+
-    body+'</section>';
+    '<div class="v3-row"><h3 class="font-semibold text-slate-100"><i class="fa-solid '+V3_MEAL_ICON[meal]+' text-teal-400 mr-2"></i>'+V3_MEAL_LABEL[meal]+'</h3>'+
+    '<span class="text-[10px] '+(cd?(cd.late?'text-orange-300':'text-teal-300'):'text-amber-300')+'">'+(cd?'<span data-cd="'+cd.t.getTime()+'" class="v3-countdown">'+v3Countdown(cd.t.getTime()-getFijiNow().getTime())+'</span> left':'Orders closed')+'</span></div>'+
+    '<p class="text-[10px] text-slate-400">'+esc(rule)+'</p>'+tonight+
+    (meal === 'dinner' ? '<p class="v3-section-title pt-1">Tomorrow · '+esc(v3DayDate(tom))+'</p>' : '<p class="text-[11px] text-slate-300">For tomorrow · '+esc(v3DayDate(tom))+'</p>')+body+'</section>';
 }
 function v3AskCancelReason(meal, onReason){
   v3Form('Cancel '+V3_MEAL_LABEL[meal].toLowerCase(), [
     { id:'why', label:'Reason', type:'select', options:['Going to the mainland','Working through the meal','Not hungry / eating elsewhere','Ordered by mistake','Other'], value:'Going to the mainland' },
     { id:'more', label:'Details (optional)', type:'text', max:150 }
   ], 'Cancel order', async function(v){ return onReason((v.why + (v.more ? ' — ' + v.more : '')).slice(0,200)); },
-  meal === 'dinner' ? 'Dinner can be changed or cancelled until 8:00pm.' : 'You can cancel and re-order up to 3 times for the same day. After the 3rd cancel this meal is locked.');
+  meal === 'dinner' ? 'Dinner can be changed or cancelled until '+esc(dinnerCutLabel())+' the day before.' : 'You can cancel and re-order up to 3 times for the same day. After the 3rd cancel this meal is locked.');
 }
 async function v3AfterMealChange(meal){
   cacheInvalidate([meal+'Orders:'+v3Info(meal).serviceDate, 'kitchenDashboard', 'v3home', 'myOrders']);
@@ -1306,35 +1322,60 @@ async function v3AfterMealChange(meal){
   v3RefreshHome().then(function(){ if (state.tab === 'meals') v3PaintMeals(); });
   if (state.tab === 'meals') v3PaintMeals();
 }
+/* order completed overlay (CSS only, respects reduced motion) */
+function v3OrderOverlay(status, line){
+  if (!document.getElementById('v3-ov-style')) {
+    const st = document.createElement('style'); st.id = 'v3-ov-style';
+    st.textContent = '.v3-ov{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,.55);animation:v3ovf .25s ease-out}'+
+      '.v3-ov-card{max-width:20rem;margin:1rem;padding:1.4rem 1.2rem;border-radius:1.25rem;background:#0f172a;border:1px solid rgba(45,212,191,.45);text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.5);animation:v3ovp .35s cubic-bezier(.2,.9,.3,1.3)}'+
+      '.v3-ov-tick{width:64px;height:64px;margin:0 auto .6rem;border-radius:9999px;background:rgba(20,184,166,.18);display:flex;align-items:center;justify-content:center;font-size:30px;color:#2dd4bf;animation:v3ovt .6s ease-out .1s both}'+
+      '@keyframes v3ovf{from{opacity:0}to{opacity:1}}@keyframes v3ovp{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}@keyframes v3ovt{0%{transform:scale(0)}70%{transform:scale(1.15)}100%{transform:scale(1)}}'+
+      '@media (prefers-reduced-motion: reduce){.v3-ov,.v3-ov-card,.v3-ov-tick{animation:none!important}}';
+    document.head.appendChild(st);
+  }
+  const pending = /pending/.test(String(status||''));
+  const old = document.getElementById('v3-order-overlay'); if (old) old.remove();
+  const el = document.createElement('div');
+  el.className = 'v3-ov'; el.id = 'v3-order-overlay'; el.setAttribute('role','status'); el.setAttribute('aria-live','polite');
+  el.innerHTML = '<div class="v3-ov-card"><div class="v3-ov-tick"><i class="fa-solid '+(pending?'fa-hourglass-half':'fa-check')+'"></i></div>'+
+    '<p class="text-base font-semibold text-slate-100">Your order is completed – '+(pending ? 'awaiting approval' : 'confirmed')+'</p>'+
+    (line ? '<p class="text-xs text-slate-300 mt-1">'+esc(line)+'</p>' : '')+'<button type="button" class="mt-4 btn-primary rounded-xl px-6 py-2 text-sm font-semibold text-white">OK</button></div>';
+  document.body.appendChild(el);
+  const close = function(){ el.remove(); };
+  el.querySelector('button').onclick = close; el.onclick = function(e){ if (e.target === el) close(); };
+  setTimeout(close, 4500);
+}
 function v3BindMealCards(){
   V3_MEALS.forEach(function(meal){
     const info = v3Info(meal);
     const label = V3_MEAL_LABEL[meal]+' ('+info.serviceDate+')';
-    const place = async function(extra){
-      const payload = Object.assign({}, extra || {});
+    const place = async function(){
+      const payload = {};
       const nid = meal === 'dinner' ? 'dinner-notes' : (meal === 'breakfast' ? 'bf-note' : 'lu-note');
       const nv = mealNoteValue(nid); if (nv !== undefined) { payload.specialNote = nv; payload.notes = nv; }
-      if (meal === 'dinner') { payload.mealChoice = $('#dinner-choice').value; saveLastDinner(payload.mealChoice, nv); }
+      if (meal === 'dinner') payload.mealChoice = $('#dinner-choice').value;
       const r = await sendOrQueue(V3_ORDER_ACTION[meal], payload, { label: label, serviceDate: info.serviceDate });
-      if (!r.success) { toast(r.error || 'Could not place the order','error'); return; }
+      if (!r.success && (r.notOnMenu || r.offMenu) && meal === 'dinner') {
+        // 2.10.2 / 3.0.0: dish not on the dinner date's menu — reload that menu and ask again
+        toast('That dish isn\'t on '+WEEKDAY_NAMES[new Date(info.serviceDate+'T12:00:00Z').getUTCDay()]+'\'s menu – please pick again','error');
+        cacheInvalidate(['dinnerMenus:'+info.serviceDate]);
+        try { await v3FetchMenu(true); } catch (e) {}
+        if (state.tab === 'meals') v3PaintMeals();
+        return;
+      }
+      if (!r.success) { toast(r.error || 'Could not place the order','error'); if (r.needsLateRequest) v3AfterMealChange(meal); return; }
       if (r.queued) { toast('No connection — saved on this phone, will send automatically','info'); renderQueueAreas(); return; }
-      toast(payload.allowLate ? 'Late request sent — waiting for the chef' : (meal === 'dinner' ? 'Dinner booked: '+payload.mealChoice : V3_MEAL_LABEL[meal]+' — you are counted in'), 'ok');
+      const o = r.data && r.data.order;
+      v3OrderOverlay(o ? o.status : (meal === 'dinner' ? 'pending' : 'ordered'), meal === 'dinner' ? 'Dinner '+v3DateLabel(info.serviceDate)+': '+payload.mealChoice : V3_MEAL_LABEL[meal]+' '+v3DateLabel(info.serviceDate));
       v3AfterMealChange(meal);
     };
-    const b = $('#btn-'+meal);
-    if (b) b.onclick = function(){
-      if (meal === 'dinner' && !info.open) { v3DinnerClosedMsg(); return; }
-      place();
-    };
-    const late = $('#btn-'+meal+'-late'); if (late) late.onclick = function(){ place({ allowLate:true }); };
+    const b = $('#btn-'+meal); if (b) b.onclick = place;
     const c = $('#btn-'+meal+'-cancel');
     if (c) c.onclick = function(){
-      const rows = v3MealRows(meal) || [];
-      const cur = rows.filter(function(o){ return !isInactiveMealStatus(o.status); }).pop();
-      if (meal === 'dinner' && !info.open && !(cur && cur.status === 'late_pending')) { v3DinnerClosedMsg(); return; }
+      const cur = v3CurOrder(meal, info.serviceDate);
       if (!cur) { toast('No active order to cancel','error'); return; }
       v3AskCancelReason(meal, async function(reason){
-        const r = await sendOrQueue('cancelMealOrder', { meal: meal, reason: reason, cancelReason: reason }, { label: 'Cancel '+label, serviceDate: info.serviceDate });
+        const r = await sendOrQueue('cancelMealOrder', { meal: meal, reason: reason, cancelReason: reason, serviceDate: info.serviceDate }, { label: 'Cancel '+label, serviceDate: info.serviceDate });
         if (!r.success) { toast(r.error || 'Could not cancel','error'); return false; }
         if (r.queued) { toast('No connection — cancel saved, will send automatically','info'); return true; }
         const used = r.data && r.data.cancelsUsed;
@@ -1344,85 +1385,21 @@ function v3BindMealCards(){
       });
     };
   });
-  $$('.v3-go-late').forEach(function(b){ b.onclick = function(){ const s = $('#late-meal'); if (s) { s.scrollIntoView({ behavior:'smooth', block:'start' }); const sel = $('#late-slot'); if (sel) { const o = [...sel.options].find(function(x){ return x.value.indexOf(b.dataset.meal+'|') === 0; }); if (o) sel.value = o.value; sel.dispatchEvent(new Event('change')); } } }; });
-}
-function v3DinnerClosedMsg(){
-  const m = $('#dinner-closed-msg');
-  const html = '<div class="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-100" id="dinner-hod-msg"><i class="fa-solid fa-circle-info mr-1"></i>Contact your HOD for a late meal request.</div>';
-  if (m) m.innerHTML = html;
-  toast('Contact your HOD for a late meal request','error');
-}
-/* late meal request (after department approval) */
-function v3LateSlots(){
-  const n = getFijiNow(), h = n.getUTCHours(), today = fijiDateString(), tom = fijiDateString(addFijiDays(n,1));
-  const out = [];
-  // today's meals only while they can still be served
-  if (h < 9) out.push({ meal:'breakfast', date: today });
-  if (h < 13) out.push({ meal:'lunch', date: today });
-  if (h < 19) out.push({ meal:'dinner', date: today });
-  V3_MEALS.forEach(function(m){ const i = v3Info(m); if (!i.open && !(m === 'breakfast' && i.lateOpen)) out.push({ meal:m, date: tom }); });
-  return out;
-}
-function v3LateCard(){
-  const head = v3Title('fa-clock-rotate-left','Late meal request');
-  if (!v3DeptOk()) return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="late-meal">'+head+'<p class="text-xs text-slate-400"><i class="fa-solid fa-lock mr-1"></i>Available after your HOD accepts your department request.</p></section>';
-  const slots = v3LateSlots();
-  if (!slots.length) return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="late-meal">'+head+'<p class="text-xs text-slate-400">All of tomorrow\'s meals are still open — just order above.</p></section>';
-  return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="late-meal">'+head+
-    '<p class="text-[11px] text-slate-400">Missed a cutoff? This goes to the chef, admin and your HOD / assistant HOD. It only counts once approved.</p>'+
-    '<label class="text-[10px] text-slate-400" for="late-slot">Meal</label><select id="late-slot" class="ui-input w-full">'+slots.map(function(s){ return '<option value="'+s.meal+'|'+s.date+'">'+V3_MEAL_LABEL[s.meal]+' · '+esc(v3DateLabel(s.date))+'</option>'; }).join('')+'</select>'+
-    '<div id="late-dish-wrap" class="space-y-1"></div>'+
-    '<label class="text-[10px] text-slate-400" for="late-reason">Reason *</label><input id="late-reason" class="ui-input w-full" maxlength="300" placeholder="e.g. came back on the late boat"/>'+
-    mealNoteInputHtml('late-note','')+
-    '<button type="button" id="btn-late-meal" class="btn-primary w-full rounded-xl py-3 text-sm font-semibold text-white">Send late meal request</button></section>';
-}
-function v3BindLateCard(){
-  const sel = $('#late-slot'); if (!sel) return;
-  const paintDish = function(){
-    const parts = sel.value.split('|'), wrap = $('#late-dish-wrap');
-    if (parts[0] !== 'dinner') { wrap.innerHTML = ''; return; }
-    const items = parts[1] === dinnerCutoffInfo().serviceDate ? v3MenuItems() : [];
-    wrap.innerHTML = '<label class="text-[10px] text-slate-400" for="late-dish">Dish</label>'+(items.length ? '<select id="late-dish" class="ui-input w-full">'+items.map(function(n){ return '<option>'+esc(n)+'</option>'; }).join('')+'</select>' : '<input id="late-dish" class="ui-input w-full" maxlength="80" placeholder="Dish (if you know it) — else Standard"/>');
-  };
-  sel.onchange = paintDish; paintDish();
-  $('#btn-late-meal').onclick = async function(){
-    const parts = sel.value.split('|'), reason = ($('#late-reason').value||'').trim();
-    if (!reason) { toast('Please give a reason','error'); $('#late-reason').focus(); return; }
-    const payload = { meal: parts[0], serviceDate: parts[1], reason: reason, specialNote: mealNoteValue('late-note') || '', clientRequestId: newRequestId() };
-    if (parts[0] === 'dinner') payload.mealChoice = ($('#late-dish') && $('#late-dish').value) || 'Standard';
-    this.disabled = true;
-    const d = await v3Call('requestLateMeal', payload, 'Late request sent — chef, admin and your HOD have been notified');
-    this.disabled = false;
-    if (d) { $('#late-reason').value = ''; v3AfterMealChange(parts[0]); }
-  };
-}
-/* weekly menu likes / dislikes */
-function v3WeeklyMenuHtml(pack){
-  if (!pack) return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="weekly-menu">'+v3Title('fa-calendar-week','This week\'s dinner menu')+v3Loading()+'</section>';
-  const todayWd = getFijiNow().getUTCDay();
-  return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="weekly-menu">'+v3Title('fa-calendar-week','This week\'s dinner menu')+
-    '<p class="text-[11px] text-slate-400">Like or dislike dishes so the chef can replace the least popular ones. Burger and pizza are daily items and are not listed.</p>'+
-    (pack.days||[]).map(function(d){
-      return '<details class="rounded-xl bg-slate-900/50 border border-slate-700/60 min-w-0"'+(d.weekday===todayWd||d.weekday===(todayWd+1)%7?' open':'')+'><summary class="px-3 py-2 text-sm text-slate-100 cursor-pointer flex items-center justify-between"><span>'+esc(d.name)+(d.weekday===todayWd?' <span class="text-[10px] text-teal-300">today</span>':(d.weekday===(todayWd+1)%7?' <span class="text-[10px] text-teal-300">tomorrow</span>':''))+'</span><span class="text-[10px] text-slate-400">'+d.items.length+' dishes</span></summary>'+
-        '<div class="px-3 pb-2 space-y-1.5">'+(d.items.length ? d.items.map(function(it){
-          return '<div class="v3-row text-xs py-1 min-w-0"><span class="min-w-0 break-words text-slate-200">'+esc(it.dish)+'</span><span class="flex gap-1.5 shrink-0">'+
-            '<button type="button" class="v3-vote rounded-lg px-2 py-1 border '+(it.myVote>0?'border-teal-400/60 bg-teal-500/15 text-teal-200':'border-slate-600 text-slate-300')+'" data-dish="'+esc(it.dish)+'" data-v="1" aria-label="Like '+esc(it.dish)+'"><i class="fa-solid fa-thumbs-up mr-1"></i>'+it.likes+'</button>'+
-            '<button type="button" class="v3-vote rounded-lg px-2 py-1 border '+(it.myVote<0?'border-rose-400/60 bg-rose-500/15 text-rose-200':'border-slate-600 text-slate-300')+'" data-dish="'+esc(it.dish)+'" data-v="-1" aria-label="Dislike '+esc(it.dish)+'"><i class="fa-solid fa-thumbs-down mr-1"></i>'+it.dislikes+'</button></span></div>';
-        }).join('') : v3Empty('No dishes set.'))+'</div></details>';
-    }).join('')+'</section>';
-}
-function v3BindVotes(){
-  $$('.v3-vote').forEach(function(b){ b.onclick = async function(){
-    const on = b.classList.contains('bg-teal-500/15') || b.classList.contains('bg-rose-500/15');
-    const d = await v3Call('voteMenuItem', { dish: b.dataset.dish, vote: on ? 0 : Number(b.dataset.v) });
-    if (!d) return;
-    const pack = cachePeek('weeklyMenu');
-    if (pack) { (pack.days||[]).forEach(function(day){ day.items.forEach(function(it){ if (it.dishKey === d.dishKey) { it.likes = d.likes; it.dislikes = d.dislikes; it.myVote = d.myVote; } }); }); cacheSet('weeklyMenu', pack); }
-    const wm = $('#weekly-menu'); if (wm) { const openDays = $$('#weekly-menu details').map(function(x){ return x.open; }); wm.outerHTML = v3WeeklyMenuHtml(pack); $$('#weekly-menu details').forEach(function(x, i){ x.open = !!openDays[i]; }); v3BindVotes(); }
+  $$('.v3-late-open').forEach(function(b){ b.onclick = function(){ state._lateOpen = b.dataset.meal; v3PaintMeals(); const f = document.querySelector('[data-late^="'+b.dataset.meal+'-"] input'); if (f) f.focus(); }; });
+  $$('.v3-late-send').forEach(function(b){ b.onclick = async function(){
+    const meal = b.dataset.meal, date = b.dataset.date, id = meal+'-'+date;
+    const reason = ($('#late-reason-'+id).value||'').trim();
+    if (!reason) { toast('Please give a reason','error'); $('#late-reason-'+id).focus(); return; }
+    const payload = { meal: meal, serviceDate: date, reason: reason, specialNote: mealNoteValue('late-note-'+id) || '', clientRequestId: newRequestId() };
+    if (meal === 'dinner') payload.mealChoice = ($('#late-dish-'+id) && $('#late-dish-'+id).value) || 'Standard';
+    b.disabled = true;
+    const d = await v3Call('requestLateMeal', payload);
+    b.disabled = false;
+    if (d) { state._lateOpen = null; v3OrderOverlay('late_pending', 'Late '+V3_MEAL_LABEL[meal].toLowerCase()+' · '+v3DateLabel(date)+' — approved automatically at '+mtLabel(mealTimesNow()['late_close_'+meal])); cacheInvalidate(['v3home']); v3AfterMealChange(meal); }
   }; });
 }
 function v3FeedbackCard(){
-  return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="chef-feedback">'+v3Title('fa-comment-dots','Chef feedback')+
+  return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="chef-feedback">'+v3Title('fa-comment-dots','Feedback to the chef')+
     '<p class="text-[11px] text-slate-400">Issues or requests about the food go straight to the chef.</p>'+
     '<select id="fb-kind" class="ui-input w-full"><option value="issue">Issue with food</option><option value="request">Request / idea</option><option value="compliment">Compliment</option></select>'+
     '<textarea id="fb-msg" rows="3" maxlength="800" class="ui-input w-full" placeholder="e.g. rice was cold at the second lunch sitting"></textarea>'+
@@ -1439,20 +1416,13 @@ function v3BindFeedback(){
     if (d) $('#fb-msg').value = '';
   };
 }
-function v3SpecialEntry(){
-  if (!(v3CanDept() || v3CanChef())) return '';
-  return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="special-entry">'+v3Title('fa-star','Special meal order request')+
-    '<p class="text-[11px] text-slate-400">Order for staff without a phone, mainland contractors or visitors. It goes to the chef and appears in the kitchen lists (with any allergy notes) once accepted.</p>'+
-    '<button type="button" onclick="v3OpenSpecialForm()" class="btn-primary w-full rounded-xl py-2.5 text-sm font-semibold text-white"><i class="fa-solid fa-plus mr-1"></i>New special meal order</button>'+
-    '<button type="button" onclick="navigate(\'special\')" class="w-full rounded-xl py-2 text-xs border border-slate-600 text-slate-300">My special orders & status</button></section>';
-}
 function v3PaintMeals(){
   const focus = state.mealFocus; state.mealFocus = null;
-  const keepLate = $('#late-reason') ? $('#late-reason').value : '';
-  $('#main-content').innerHTML = v3Page(v3CutoffBanner() + queueHostHtml('breakfast,lunch,dinner') + v3StatusBlock() +
-    V3_MEALS.map(v3MealCard).join('') + v3LateCard() + v3SpecialEntry() + v3WeeklyMenuHtml(cachePeek('weeklyMenu')) + v3FeedbackCard(), 'meals-root');
-  bindQueueButtons(); v3BindMealCards(); v3BindLateCard(); v3BindVotes(); v3BindFeedback(); v3StartTicker();
-  if (keepLate && $('#late-reason')) $('#late-reason').value = keepLate;
+  const keep = {}; $$('#meals-root input, #meals-root textarea, #meals-root select').forEach(function(el){ if (el.id) keep[el.id] = el.value; });
+  $('#main-content').innerHTML = v3Page(v3CutoffBanner() + queueHostHtml('breakfast,lunch,dinner') + v3MealDash() +
+    v3MealCard('dinner') + v3MealCard('lunch') + v3MealCard('breakfast') + v3FeedbackCard(), 'meals-root');
+  Object.keys(keep).forEach(function(k){ const el = document.getElementById(k); if (el && keep[k] && el.tagName !== 'SELECT') el.value = keep[k]; });
+  bindQueueButtons(); v3BindMealCards(); v3BindFeedback(); v3StartTicker();
   if (focus) { const el = $('#meal-card-'+focus); if (el) setTimeout(function(){ el.scrollIntoView({ block:'start' }); }, 30); }
 }
 async function renderMeals(){
@@ -1460,9 +1430,10 @@ async function renderMeals(){
   v3PaintMeals();
   await bootWait();
   if (state.tab !== 'meals') return;
+  const today = v3Today();
   const jobs = V3_MEALS.map(function(m){ return v3FetchMeal(m).catch(function(){ return null; }); });
   jobs.push(v3FetchMenu().catch(function(){ return null; }));
-  jobs.push((cacheGet('weeklyMenu') ? Promise.resolve(cachePeek('weeklyMenu')) : api('getWeeklyMenu', {}).then(function(r){ if (r && r.success) cacheSet('weeklyMenu', r.data); return r && r.data; })).catch(function(){ return null; }));
+  jobs.push(v3FetchMenu(false, today).catch(function(){ return null; }));
   if (!cacheGet('v3home')) jobs.push(v3RefreshHome());
   await Promise.all(jobs);
   if (state.tab === 'meals' && !v3HomeTyping()) v3PaintMeals();
@@ -1509,7 +1480,7 @@ async function v3OpenSpecialForm(){
     this.disabled = false;
     if (!d) return;
     closeModal(); cacheInvalidate(['v3home','kitchenDashboard','mealRequests']);
-    if (state.tab === 'special') v3RenderSpecialPage();
+    if (state.tab === 'special' || state.tab === 'mealbehalf') v3RenderSpecialPage();
   };
 }
 function v3RequestCard(x, actions){
@@ -1531,18 +1502,13 @@ function v3BindRequestCards(root, after){
   }; });
 }
 async function v3RenderSpecialPage(){
-  if (v3Station()) { // Chef station: HOD special meal orders to accept / decline (stations never place orders)
-    $('#main-content').innerHTML = v3Page(v3Back('chef','Chef') + '<section class="glass rounded-2xl p-4 space-y-2 min-w-0">'+v3Title('fa-star','Special meal orders from HODs (last 3 days)')+'<div id="sp-list">'+v3Loading()+'</div></section>', 'special-root');
-    const d0 = await v3Call('getMealRequests', { days: 3 });
-    if (state.tab !== 'special') return;
-    const rows0 = ((d0 && d0.requests) || []).filter(function(x){ return x.kind === 'special'; });
-    $('#sp-list').innerHTML = rows0.length ? '<div class="space-y-2">'+rows0.map(function(x){ return v3RequestCard(x, true); }).join('')+'</div>' : v3Empty('None yet.');
-    v3BindRequestCards($('#sp-list'), v3RenderSpecialPage);
-    return;
-  }
-  $('#main-content').innerHTML = v3Page(v3Back('meals','Meals') + v3SpecialEntry() + '<section class="glass rounded-2xl p-4 space-y-2 min-w-0">'+v3Title('fa-list','Special orders I sent (last 3 days)')+'<div id="sp-list">'+v3Loading()+'</div></section>', 'special-root');
+  const back = state._roleMode === 'kitchen' ? v3RoleBack('kitchen') : v3RoleBack('dept');
+  $('#main-content').innerHTML = v3Page(back + '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="sp-entry">'+v3Title('fa-star','Meal on behalf / special meal')+
+    '<p class="text-[11px] text-slate-400">Order a meal for staff without a phone or for a contractor. It goes to the chef, within the normal ordering times.</p>'+
+    '<button type="button" onclick="v3OpenSpecialForm()" id="btn-special" class="btn-primary w-full rounded-xl py-2.5 text-sm font-semibold text-white"><i class="fa-solid fa-plus mr-1"></i>New order for someone</button></section>'+
+    '<section class="glass rounded-2xl p-4 space-y-2 min-w-0">'+v3Title('fa-list','Special orders I sent (last 3 days)')+'<div id="sp-list">'+v3Loading()+'</div></section>', 'special-root');
   const d = await v3Call('getMealRequests', { days: 3 });
-  if (state.tab !== 'special') return;
+  if (state.tab !== 'special' && state.tab !== 'mealbehalf') return;
   const me = String(state.user.email).toLowerCase();
   const rows = ((d && d.requests) || []).filter(function(x){ return x.kind === 'special' && String(x.requestedBy).toLowerCase() === me; });
   $('#sp-list').innerHTML = rows.length ? '<div class="space-y-2">'+rows.map(function(x){ return v3RequestCard(x, false); }).join('')+'</div>' : v3Empty('None yet.');
@@ -1550,13 +1516,12 @@ async function v3RenderSpecialPage(){
 
 /* ============ I. Approvals inbox (HOD / chef / admin / superadmin) ============ */
 async function v3RenderApprovals(){
-  $('#main-content').innerHTML = v3Page((v3IsSuper() ? '' : v3Back('home','Home')) + '<div id="ap-body" class="space-y-4">'+v3Loading()+'</div>', 'approvals-root');
+  $('#main-content').innerHTML = v3Page((v3IsSuper() ? '' : v3RoleBack('dept')) + '<div id="ap-body" class="space-y-4">'+v3Loading()+'</div>', 'approvals-root');
   const me = String(state.user.email).toLowerCase();
   const wantLeave = v3CanDept(), wantMeals = v3CanDept() || v3CanChef();
-  const [lv, mr, js] = await Promise.all([
+  const [lv, mr] = await Promise.all([
     wantLeave ? api('getLeave', { scope: v3IsAdmin() ? 'all' : 'dept' }).catch(function(){ return null; }) : null,
-    wantMeals ? api('getMealRequests', { days: 3 }).catch(function(){ return null; }) : null,
-    v3CanDept() ? (v3IsAdmin() ? api('getUsers', { activeOnly:false }) : api('getDeptStaff', {})).catch(function(){ return null; }) : null
+    wantMeals ? api('getMealRequests', { days: 3 }).catch(function(){ return null; }) : null
   ]);
   if (state.tab !== 'approvals') return;
   let html = '';
@@ -1573,22 +1538,17 @@ async function v3RenderApprovals(){
     const reqs = ((mr && mr.data && mr.data.requests) || []).filter(function(x){ return x.canDecide; });
     const late = reqs.filter(function(x){ return x.kind === 'late'; }), sp = reqs.filter(function(x){ return x.kind === 'special'; });
     html += '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="ap-late">'+v3Title('fa-clock-rotate-left','Late meal requests', v3Chip(String(late.length), late.length?'warn':'mute'))+
+      '<p class="text-[10px] text-slate-400">Late requests are approved automatically when the late window closes ('+esc(mtLabel(mealTimesNow().late_close_dinner))+' dinner · '+esc(mtLabel(mealTimesNow().late_close_breakfast))+' breakfast & lunch). You can decline one before then.</p>'+
       (late.length ? v3ApproveAllBtn('late', late.length) + late.map(function(x){ return v3RequestCard(x, true); }).join('') : v3Empty('No late meal requests waiting.'))+'</section>';
     if (v3CanChef()) html += '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="ap-special">'+v3Title('fa-star','Special meal requests', v3Chip(String(sp.length), sp.length?'warn':'mute'))+
       (sp.length ? sp.map(function(x){ return v3RequestCard(x, true); }).join('') : v3Empty('No special requests waiting.'))+'</section>';
   }
-  if (v3CanDept()) {
-    let pend = [];
-    if (js && js.success) pend = v3IsAdmin() ? (js.data.users||[]).filter(function(u){ return u.deptStatus === 'pending' && (u.active || u.verified); }) : (js.data.pending||[]);
-    html += '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="ap-joins">'+v3Title('fa-user-plus','Department join requests', v3Chip(String(pend.length), pend.length?'warn':'mute'))+
-      (pend.length ? v3ApproveAllBtn('joins', pend.length) + pend.map(v3JoinCard).join('') : v3Empty('No one is waiting to join.'))+'</section>';
-  }
   $('#ap-body').innerHTML = html || v3Empty('Nothing needs your approval.');
   const root = $('#ap-body');
   const again = function(){ cacheInvalidate(['v3home']); v3RefreshHome().then(function(){ renderNav('#bottom-nav'); }); v3RenderApprovals(); };
-  v3BindLeaveCards(root, again); v3BindRequestCards(root, again); v3BindJoinCards(root, again);
+  v3BindLeaveCards(root, again); v3BindRequestCards(root, again);
   root.querySelectorAll('.v3-ap-all').forEach(function(b){ b.onclick = async function(){
-    const what = { leave:'leave requests (HOD step)', final:'leave requests (final approval)', late:'late meal requests', joins:'join requests' }[b.dataset.k];
+    const what = { leave:'leave requests (HOD step)', final:'leave requests (final approval)', late:'late meal requests' }[b.dataset.k];
     if (!confirm('Approve all '+b.dataset.n+' '+what+'?')) return;
     b.disabled = true;
     const d = await v3Call('approveAllPending', { kind: b.dataset.k });
@@ -1620,24 +1580,22 @@ function v3BindJoinCards(root, after){
 async function v3RenderDeptStaff(){
   const depts = PCR_DEPARTMENTS;
   const dept = v3IsAdmin() ? (state.deptView || state.user.department || depts[0]) : state.user.department;
-  $('#main-content').innerHTML = v3Page(v3Back('more','More') +
-    (v3IsAdmin() ? '<select id="ds-dept" class="ui-input w-full">'+depts.map(function(d){ return '<option'+(d===dept?' selected':'')+'>'+esc(d)+'</option>'; }).join('')+'</select>' : '<p class="text-xs text-slate-400">'+esc(dept)+' · you can accept staff, edit their details or remove them from the department. Only admin can move someone to another department.</p>')+
+  $('#main-content').innerHTML = v3Page(v3RoleBack('dept') +
+    (v3IsAdmin() ? '<select id="ds-dept" class="ui-input w-full">'+depts.map(function(d){ return '<option'+(d===dept?' selected':'')+'>'+esc(d)+'</option>'; }).join('')+'</select>' : '<p class="text-xs text-slate-400">'+esc(dept)+' · everyone who signs up with your department is listed here. You can edit their details or remove them from the department. Only admin can move someone to another department.</p>')+
     '<div id="ds-body" class="space-y-4">'+v3Loading()+'</div>', 'deptstaff-root');
   const sel = $('#ds-dept'); if (sel) sel.onchange = function(){ state.deptView = sel.value; v3RenderDeptStaff(); };
   const d = await v3Call('getDeptStaff', { department: dept });
   if (state.tab !== 'deptstaff' || !d) return;
   const staffRow = function(u){
-    return '<div class="v3-row py-2 border-b border-slate-700/40 last:border-0 min-w-0"><div class="min-w-0"><p class="text-sm text-slate-100 truncate">'+esc(fullDisplayName(u))+(u.assistantHod?' '+v3Chip('Asst HOD','info'):'')+(v3RoleOf(u)!=='staff'?' '+v3Chip(esc(V3_ROLE_LABEL[v3RoleOf(u)]),'ok'):'')+'</p>'+
+    return '<div class="v3-row py-2 border-b border-slate-700/40 last:border-0 min-w-0"><div class="min-w-0"><p class="text-sm text-slate-100 truncate">'+esc(fullDisplayName(u))+(v3RoleOf(u)!=='staff'||v3IsAsst(u)?' '+v3Chip(esc(v3RoleLabel(u)),'ok'):'')+'</p>'+
       '<p class="text-[10px] text-slate-400 truncate">'+esc(u.email)+(u.contact?' · '+esc(u.contact):'')+(u.roster?' · '+esc(u.roster):'')+'</p></div>'+
-      (String(u.email).toLowerCase() !== String(state.user.email).toLowerCase() && (v3IsAdmin() || v3RoleOf(u) === 'staff') ? '<div class="flex gap-1 shrink-0"><button type="button" class="v3-ds-edit rounded-lg px-2 py-1 text-[11px] border border-slate-600 text-slate-200" data-email="'+esc(u.email)+'">Edit</button>'+
+      (String(u.email).toLowerCase() !== String(state.user.email).toLowerCase() && (v3IsAdmin() || v3RoleLabel(u) === 'Staff') ? '<div class="flex gap-1 shrink-0"><button type="button" class="v3-ds-edit rounded-lg px-2 py-1 text-[11px] border border-slate-600 text-slate-200" data-email="'+esc(u.email)+'">Edit</button>'+
       '<button type="button" class="v3-ds-rm rounded-lg px-2 py-1 text-[11px] border border-rose-500/40 text-rose-200" data-email="'+esc(u.email)+'">Remove</button></div>' : '')+'</div>';
   };
   $('#ds-body').innerHTML =
-    '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="ds-pending">'+v3Title('fa-user-plus','Waiting to join', v3Chip(String(d.pending.length), d.pending.length?'warn':'mute'))+(d.pending.length ? d.pending.map(v3JoinCard).join('') : v3Empty('No join requests.'))+'</section>'+
     '<section class="glass rounded-2xl p-4 space-y-1 min-w-0" id="ds-staff">'+v3Title('fa-users','Department staff', v3Chip(String(d.staff.length),'mute'))+(d.staff.length ? d.staff.map(staffRow).join('') : v3Empty('No accepted staff yet.'))+'</section>'+
-    (d.declined.length ? '<section class="glass rounded-2xl p-4 space-y-1 min-w-0">'+v3Title('fa-user-slash','Declined / removed')+d.declined.map(function(u){ return '<p class="text-xs text-slate-400 truncate">'+esc(fullDisplayName(u))+' · '+esc(u.deptStatus)+'</p>'; }).join('')+'</section>' : '');
+    ((d.declined||[]).length ? '<section class="glass rounded-2xl p-4 space-y-1 min-w-0">'+v3Title('fa-user-slash','Removed from the department')+d.declined.map(function(u){ return '<p class="text-xs text-slate-400 truncate">'+esc(fullDisplayName(u))+'</p>'; }).join('')+'</section>' : '');
   const root = $('#ds-body');
-  v3BindJoinCards(root, function(){ cacheInvalidate(['v3home']); v3RefreshHome(); v3RenderDeptStaff(); });
   root.querySelectorAll('.v3-ds-edit').forEach(function(b){ b.onclick = function(){
     const u = d.staff.find(function(x){ return x.email === b.dataset.email; }); if (!u) return;
     v3Form('Edit '+fullDisplayName(u), [
@@ -1647,14 +1605,14 @@ async function v3RenderDeptStaff(){
     ], 'Save', async function(v){ const r = await v3Call('updateDeptStaff', Object.assign({ targetEmail: u.email }, v), 'Saved'); if (r) v3RenderDeptStaff(); return !!r; }, 'Department: '+esc(u.department)+' (only admin can change it).');
   }; });
   root.querySelectorAll('.v3-ds-rm').forEach(function(b){ b.onclick = async function(){
-    if (!confirm('Remove '+b.dataset.email+' from '+dept+'? They lose leave, late meals and department updates until admin re-adds them.')) return;
+    if (!confirm('Remove '+b.dataset.email+' from '+dept+'? They stop getting department updates and their HOD approvals until admin sets their department again.')) return;
     const r = await v3Call('removeFromDept', { targetEmail: b.dataset.email }, 'Removed from department');
     if (r) v3RenderDeptStaff();
   }; });
 }
 async function v3RenderDeptUpdates(){
-  const lead = v3CanDept() && !v3IsAdmin() ? true : v3IsAdmin();
-  $('#main-content').innerHTML = v3Page(v3Back('more','More') +
+  const lead = state._roleMode === 'dept' && v3CanDept();
+  $('#main-content').innerHTML = v3Page((lead ? v3RoleBack('dept') : v3Back('more','More')) +
     (lead ? '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="du-post">'+v3Title('fa-pen','Post an update · '+esc(state.user.department||''))+
       '<input id="du-title" class="ui-input w-full" maxlength="100" placeholder="Title"/><textarea id="du-body" rows="3" maxlength="1500" class="ui-input w-full" placeholder="Message for accepted staff in your department"></textarea>'+
       '<button type="button" id="du-send" class="btn-primary w-full rounded-xl py-2.5 text-sm font-semibold text-white">Post update</button></section>' : '')+
@@ -1667,53 +1625,44 @@ async function v3RenderDeptUpdates(){
     if (r) { cacheInvalidate(['v3home']); v3RefreshHome(); v3RenderDeptUpdates(); }
   };
   const d = await v3Call('getDeptUpdates', { limit: 30 });
-  if (state.tab !== 'deptupdates') return;
+  if (state.tab !== 'deptupdates' && state.tab !== 'deptupdatespost') return;
   const list = $('#du-list');
   if (!d) { list.innerHTML = ''; return; }
-  if (d.locked) { list.innerHTML = v3Card('<p class="text-xs text-slate-400"><i class="fa-solid fa-lock mr-1"></i>Department updates open after your HOD accepts your department request.</p>'); return; }
+  if (d.locked) { list.innerHTML = v3Card('<p class="text-xs text-slate-400"><i class="fa-solid fa-lock mr-1"></i>Department updates show once you are in a department.</p>'); return; }
   list.innerHTML = (d.updates||[]).length ? d.updates.map(function(u){ return v3UpdateCard(u, false); }).join('') : v3Card(v3Empty('No updates yet.'));
   v3BindUpdateCards(list, v3RenderDeptUpdates);
 }
 
 /* ============ K. More, profile summary, history, notifications ============ */
 function renderMore(){
-  const u = state.user, r = v3RoleOf(), h = v3Home(), hb = h.hodBar || {};
+  const u = state.user, h = v3Home(), hb = h.hodBar || {};
   const unread = state._v3Unread || 0;
   const group = function(title, rows){ return rows ? '<section class="space-y-1.5 min-w-0"><h3 class="v3-section-title px-1">'+title+'</h3><div class="glass rounded-2xl overflow-hidden">'+rows+'</div></section>' : ''; };
   const profile = '<section class="glass rounded-2xl p-4 min-w-0" id="more-profile"><div class="flex items-center gap-3 min-w-0">'+homeAvatarHtml(u)+'<div class="min-w-0 flex-1">'+
     '<p class="font-semibold text-slate-100 truncate">'+esc(fullDisplayName(u))+'</p><p class="text-[11px] text-slate-400 truncate">'+esc(u.email)+'</p>'+
-    '<p class="text-[11px] text-slate-300 mt-0.5">'+esc(v3RoleLabel(u))+'</p></div>'+
-    '<button type="button" onclick="navigate(\'profile\')" class="rounded-lg px-3 py-2 text-xs border border-teal-500/40 text-teal-200 shrink-0">Edit</button></div>'+
-    '<div class="mt-3 grid grid-cols-2 gap-2 text-[11px]"><div class="rounded-xl bg-slate-900/50 border border-slate-700/60 p-2 min-w-0"><p class="text-slate-500">Department (read-only)</p><p class="text-slate-100 truncate">'+esc(u.department||'—')+'</p></div>'+
-    '<div class="rounded-xl bg-slate-900/50 border border-slate-700/60 p-2 min-w-0"><p class="text-slate-500">Department status</p><p>'+v3Status(v3DeptStatus())+'</p></div></div></section>';
+    '<p class="text-[11px] text-slate-300 mt-0.5" id="more-roles">'+esc(v3RoleLabel(u))+' · '+esc(u.department||'—')+'</p></div>'+
+    '<button type="button" onclick="navigate(\'profile\')" class="rounded-lg px-3 py-2 text-xs border border-teal-500/40 text-teal-200 shrink-0">Edit</button></div></section>';
   let html = profile;
-  if (r === 'super_admin') {
+  // role buttons (3.0.0): only what the account holds
+  const btns = v3IsSuper() ? [] : v3Buttons(u);
+  if (btns.length) {
+    const badge = { admin: 0, kitchen: h.chef ? (h.chef.pending.late + h.chef.pending.special + (h.chef.feedbackNew||0)) : 0, boat: (h.boat && h.boat.emergencyPending) || 0, dept: (hb.leave||0)+(hb.late||0)+(hb.leaveMgmt||0) };
+    html += '<section class="space-y-1.5 min-w-0" id="more-rolebtns"><h3 class="v3-section-title px-1">My role pages</h3><div class="grid grid-cols-2 gap-2">'+btns.map(function(k){
+      const b = V3_BUTTONS[k];
+      return '<button type="button" onclick="navigate(\''+b.tab+'\')" class="glass rounded-2xl p-3 text-left min-w-0 relative border border-teal-500/30" data-rolebtn="'+k+'">'+
+        '<i class="fa-solid '+b.icon+' text-teal-300 text-lg"></i><p class="text-sm font-semibold text-slate-100 mt-1">'+esc(b.label)+'</p><p class="text-[10px] text-slate-400 leading-tight">'+esc(b.sub)+'</p>'+
+        (badge[k] ? '<span class="v3-count absolute top-2 right-2">'+badge[k]+'</span>' : '')+'</button>';
+    }).join('')+'</div>'+(state.rolesNeedSignIn && !state.demo ? '<button type="button" onclick="v3AskReauth()" class="w-full text-[11px] text-sky-300 py-1"><i class="fa-solid fa-lock mr-1"></i>Sign in again to open role pages</button>' : '')+'</section>';
+  }
+  if (v3IsSuper()) {
     html += group('Account', v3Row(v3Nav('notifications'),'fa-bell','Notifications','', unread) + v3Row(v3Nav('history'),'fa-clock-rotate-left','My history','Everything you did in the app'));
   } else {
-    html += group('Me', v3Row(v3Nav('leave'),'fa-plane-departure','Leave requests', v3DeptOk() ? 'Request, track, escalate or cancel' : 'Opens after your HOD accepts you') +
-      v3Row(v3Nav('history'),'fa-clock-rotate-left','My history','Orders, boats, leave, requests, feedback') +
+    html += group('Me', v3Row(v3Nav('leave'),'fa-plane-departure','Leave requests','Request, track or cancel') +
+      v3Row(v3Nav('history'),'fa-clock-rotate-left','My orders & history','Orders, boats, leave, requests, feedback') +
       v3Row(v3Nav('bookings'),'fa-ticket','My boat bookings','') +
       v3Row(v3Nav('notifications'),'fa-bell','Notifications','', unread) +
-      (v3DeptOk() && !v3CanDept() ? v3Row(v3Nav('deptupdates'),'fa-bullhorn','Department updates', esc(u.department||'')) : '') +
+      v3Row(v3Nav('deptupdates'),'fa-bullhorn','Department updates', esc(u.department||'')) +
       (featureOn('feature_my_schedule') ? v3Row(v3Nav('schedule'),'fa-calendar-check','My schedule','') : ''));
-    if (v3CanDept()) html += group(v3IsAdmin() ? 'Departments' : 'My department · '+esc(u.department||''),
-      v3Row(v3Nav('approvals'),'fa-inbox','Approvals inbox','Leave, late meals, join requests', (hb.leave||0)+(hb.late||0)+(hb.joins||0)+(hb.leaveMgmt||0)) +
-      v3Row("state.leaveTabForce='"+(v3IsAdmin()?'final':'dept')+"';navigate('leave')",'fa-calendar-check','Leave requests','View all · approve or decline') +
-      v3Row(v3Nav('leavecal'),'fa-calendar-days','Leave calendar','Month view · approved and waiting') +
-      v3Row(v3Nav('deptstaff'),'fa-users','Department staff','Join requests, edit, remove', hb.joins||0) +
-      v3Row(v3Nav('deptupdates'),'fa-bullhorn','Department updates','Post, comments, likes') +
-      v3Row(v3Nav('special'),'fa-star','Special meal orders','For staff without a phone or contractors'));
-    if (v3CanChef()) html += group('Chef', v3Row(v3Nav('chef'),'fa-fire-burner','Chef hub','Dashboard & shortcuts') +
-      v3Row(v3Nav('chefreq'),'fa-clock-rotate-left','Late & special requests','Accept / decline, accept all', h.chef ? (h.chef.pending.late+h.chef.pending.special) : 0) +
-      v3Row(v3Nav('kitchen'),'fa-list-ol','Kitchen lists','Calculate, view, print, download') +
-      v3Row(v3Nav('chefmenu'),'fa-pen-to-square','Edit menu','With like / dislike counts') +
-      v3Row(v3Nav('chefcomments'),'fa-comment-dots','Food comments','Chef feedback from staff', h.chef ? h.chef.feedbackNew : 0) +
-      v3Row(v3Nav('chefreports'),'fa-chart-column','Reports & roster','Daily / weekly / monthly, roster compare') +
-      v3Row(v3Nav('snapshots'),'fa-box-archive','Meal summaries','Last 5 days · preview, PDF, print'));
-    if (v3IsAdmin()) html += group('Admin', v3Row(v3Nav('manage'),'fa-sliders','Manage','All admin tools') + v3Row(v3Nav('usersv3'),'fa-users-gear','Users & roles','') +
-      v3Row(v3Nav('reminders'),'fa-bell','Reminders','Add, edit, remove') +
-      v3Row(v3Nav('adminstatus'),'fa-file-arrow-down','Admin status & reports','Download everything'));
-    if (v3HasBoat()) html += group('Boat', v3Row(v3Nav('stboat'),'fa-ship','Boat page','Bookings, passengers, runs, boat tools'));
   }
   html += '<section class="glass rounded-2xl overflow-hidden">'+v3Row('doLogout()','fa-right-from-bracket','Sign out','')+'</section>'+
     '<p class="text-center text-[10px] text-slate-500">PCR Staff App '+esc(APP_VERSION)+(state.backendVersion?' · API '+esc(state.backendVersion):'')+(state.demo?' · demo':'')+'</p>';
@@ -1728,7 +1677,7 @@ async function v3RenderNotifications(){
   $('#nt-all').onclick = async function(){ const d = await v3Call('markNotificationRead', { markAll:true }, 'All marked read'); if (d) { state._v3Unread = 0; v3RenderNotifications(); } };
   const d = await v3Call('getMyNotifications', {});
   if (state.tab !== 'notifications' || !d) return;
-  const go = { leave:'leave', dept_join: v3CanDept() ? 'deptstaff' : 'home', late_meal:'approvals', special_meal:'chefreq', meal_request:'meals', chef_feedback: v3CanChef() ? 'chefcomments' : 'history', dept_update:'deptupdates' };
+  const go = { leave: v3CanDept() ? 'approvals' : 'leave', late_meal: v3CanChef() ? 'chefreq' : (v3CanDept() ? 'approvals' : 'meals'), special_meal:'chefreq', meal_request:'meals', meal_cancelled:'meals', order_cancelled:'meals', admin_message:'notifications', chef_feedback: v3CanChef() ? 'chefcomments' : 'history', dept_update:'deptupdates', role:'more' };
   $('#nt-list').innerHTML = (d.notifications||[]).length ? d.notifications.map(function(n){
     return '<button type="button" class="v3-nt w-full text-left rounded-xl border p-3 min-w-0 '+(n.read?'border-slate-700/60 bg-slate-900/40':'border-teal-500/40 bg-teal-500/10')+'" data-id="'+esc(n.id)+'" data-go="'+esc(go[n.kind]||'')+'">'+
       '<p class="text-sm text-slate-100 break-words">'+(n.read?'':'<span class="inline-block w-2 h-2 rounded-full bg-teal-400 mr-1.5"></span>')+esc(n.title)+'</p><p class="text-[11px] text-slate-300 break-words">'+esc(n.body)+'</p><p class="text-[10px] text-slate-500">'+esc(v3Ts(n.createdAt))+'</p></button>';
@@ -1769,36 +1718,38 @@ async function v3RenderHistory(){
   };
 }
 
-/* ============ L. Chef ============ */
-async function v3RenderChefHub(){
+/* ============ L. Kitchen Admin (chef / admin / superadmin) ============ */
+async function v3RenderKitchenAdmin(){
   const h = v3Home();
   const paint = function(c){
-    $('#main-content').innerHTML = v3Page(
+    $('#main-content').innerHTML = v3Page(v3Back('more','More') +
       '<div class="grid grid-cols-2 gap-2" id="chef-shortcuts">'+
-        v3Tile(v3Nav('chefreq'),'fa-clock-rotate-left','Late & special','Accept / decline', c ? c.pending.late + c.pending.special : 0)+
-        v3Tile(v3Nav('kitchen'),'fa-list-ol','Kitchen lists','Calculate · print · PDF')+
-        v3Tile(v3Nav('chefmenu'),'fa-pen-to-square','Edit menu','Likes & dislikes')+
-        v3Tile(v3Nav('chefcomments'),'fa-comment-dots','Food comments','From staff', c ? c.feedbackNew : 0)+
-        v3Tile(v3Nav('chefreports'),'fa-chart-column','Reports','Range · roster compare')+
-        v3Tile("v3OpenSpecialForm()",'fa-star','Special meal','Order for someone')+
-        v3Tile(v3Nav('snapshots'),'fa-box-archive','Meal summaries','Last 5 days · PDF / print')+'</div>'+
-      (v3IsSuper() && !v3Station() ? '<p class="text-[11px] text-sky-200 px-1" id="chef-as-super"><i class="fa-solid fa-user-shield mr-1"></i>Viewing the Chef page as superadmin — actions are recorded in your name.</p>' : '')+
+        v3Tile(v3Nav('kitchen'),'fa-list-ol','Lists & summaries','Prep list · PDF · saved summaries')+
+        v3Tile(v3Nav('chefreq'),'fa-clock-rotate-left','Late & special','Auto-approve at the late close', c ? c.pending.late + c.pending.special : 0)+
+        v3Tile(v3Nav('chefmenu'),'fa-pen-to-square','Dinner menus','All 7 days')+
+        v3Tile(v3Nav('mealtimes'),'fa-clock','Meal times','Cutoffs & late windows')+
+        v3Tile(v3Nav('offmenu'),'fa-triangle-exclamation','Not on the menu','Orders to fix')+
+        v3Tile(v3Nav('chefcomments'),'fa-comment-dots','Food feedback','From staff', c ? c.feedbackNew : 0)+
+        v3Tile(v3Nav('mealstats'),'fa-chart-column','Meal statistics','Range · roster compare')+
+        v3Tile(v3Nav('special'),'fa-star','Meal on behalf','Staff without a phone')+'</div>'+
+      '<p class="text-[11px] text-slate-400 px-1" id="ka-times"><i class="fa-solid fa-clock mr-1"></i>Dinner closes '+esc(dinnerCutLabel())+' the day before · late requests until '+esc(mtLabel(mealTimesNow().late_close_dinner))+' (auto-approved then) · breakfast & lunch close '+esc(mtLabel(mealTimesNow().breakfast_cutoff))+' / '+esc(mtLabel(mealTimesNow().lunch_cutoff))+'.</p>'+
       v3ChefDashCard(c)+'<div id="chef-orders">'+(state._chefOrdersHtml||v3Card(v3Loading()))+'</div><div id="chef-notes">'+(state._chefNotesHtml||'')+'</div>', 'chef-root');
     v3BindChefOrders();
   };
   paint(h.chef);
   const d = await v3Call('getChefDashboard', {});
-  if (d && state.tab === 'chef') { const cur = v3Home(); cur.chef = d; cacheSet('v3home', cur); paint(d); }
+  if (d && state.tab === 'kitchenadmin') { const cur = v3Home(); cur.chef = d; cacheSet('v3home', cur); paint(d); }
   v3LoadChefOrders();
   v3LoadChefNotes();
 }
+const v3RenderChefHub = v3RenderKitchenAdmin;
 /** Chef page: today's / tomorrow's orders (names, dish, notes) with "Served". */
 async function v3LoadChefOrders(){
   const day = state.chefDay || 'today';
   const date = day === 'today' ? fijiDateString() : fijiDateString(addFijiDays(getFijiNow(), 1));
   const get = function(a){ return api(a, { serviceDate: date }).then(function(r){ return r && r.success ? ((r.data && r.data.orders) || []) : []; }).catch(function(){ return []; }); };
   const [b, l, dn] = await Promise.all([get('getBreakfastOrders'), get('getLunchOrders'), get('getDinnerOrders')]);
-  if (state.tab !== 'chef') return;
+  if (state.tab !== 'kitchenadmin') return;
   const packs = { breakfast: b, lunch: l, dinner: dn };
   const live = function(o){ return String(o.serviceDate).slice(0,10) === date && !isInactiveMealStatus(o.status) && o.status !== 'special_pending' && o.status !== 'late_pending'; };
   const sec = V3_MEALS.map(function(m){
@@ -1809,7 +1760,8 @@ async function v3LoadChefOrders(){
         const note = kitchenNoteOf(o);
         return '<div class="v3-row text-xs py-1 border-t border-slate-700/40 min-w-0"><div class="min-w-0"><p class="text-slate-100 truncate">'+esc(orderDisplayName(o))+' <span class="text-[10px] text-slate-400">· '+esc(o.department||'')+'</span></p>'+
           (m==='dinner' && o.mealChoice ? '<p class="text-[10px] text-slate-300 truncate">'+esc(o.mealChoice)+'</p>' : '')+(note ? '<p class="text-[10px] text-amber-200 break-words">'+esc(note)+'</p>' : '')+'</div>'+
-          (o.status === 'served' ? '<span class="text-[10px] text-emerald-300 shrink-0">✓ Served</span>' : '<button type="button" class="v3-served shrink-0 rounded-lg px-2 py-1 text-[11px] border border-teal-500/40 text-teal-200" data-id="'+esc(o.id)+'" data-meal="'+m+'">Served</button>')+'</div>';
+          (o.status === 'served' ? '<span class="text-[10px] text-emerald-300 shrink-0">✓ Served</span>' : '<span class="flex gap-1 shrink-0"><button type="button" class="v3-served rounded-lg px-2 py-1 text-[11px] border border-teal-500/40 text-teal-200" data-id="'+esc(o.id)+'" data-meal="'+m+'">Served</button>'+
+            '<button type="button" class="v3-ord-cancel rounded-lg px-2 py-1 text-[11px] border border-rose-500/40 text-rose-200" data-id="'+esc(o.id)+'" data-meal="'+m+'" data-name="'+esc(orderDisplayName(o))+'" aria-label="Cancel order">Cancel</button></span>')+'</div>';
       }).join('') : v3Empty('No orders.'))+'</div></details>';
   }).join('');
   state._chefOrdersHtml = '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="chef-orders-card">'+v3Title('fa-utensils','Orders', '<div class="flex gap-1 rounded-lg bg-slate-900/60 p-0.5">'+['today','tomorrow'].map(function(k){ return '<button type="button" class="v3-chefday rounded-md px-2 py-1 text-[11px] '+(day===k?'bg-teal-600 text-white font-semibold':'text-slate-300')+'" data-day="'+k+'">'+(k==='today'?'Today':'Tomorrow')+'</button>'; }).join('')+'</div>')+
@@ -1818,6 +1770,7 @@ async function v3LoadChefOrders(){
 }
 function v3BindChefOrders(){
   $$('.v3-chefday').forEach(function(b){ b.onclick = function(){ state.chefDay = b.dataset.day; state._chefOrdersHtml = ''; const box = $('#chef-orders'); if (box) box.innerHTML = v3Card(v3Loading()); v3LoadChefOrders(); }; });
+  $$('.v3-ord-cancel').forEach(function(b){ b.onclick = function(){ v3AdminCancelForm(b.dataset.id, b.dataset.meal, b.dataset.name, function(){ cacheInvalidate(['kitchenDashboard']); v3LoadChefOrders(); }); }; });
   $$('.v3-served').forEach(function(b){ b.onclick = async function(){
     const r = await v3Call('markOrderStatus', { id: b.dataset.id, meal: b.dataset.meal, status:'served' }, 'Marked served');
     if (r) { cacheInvalidate(['kitchenDashboard']); v3LoadChefOrders(); }
@@ -1826,7 +1779,7 @@ function v3BindChefOrders(){
 /** Chef page: Allergies & special requests for the upcoming services (same card as the kitchen lists). */
 async function v3LoadChefNotes(){
   let r = null; try { r = await api('getKitchenDashboard', {}); } catch (e) {}
-  if (state.tab !== 'chef' || !r || !r.success) return;
+  if (state.tab !== 'kitchenadmin' || !r || !r.success) return;
   const dsh = r.data || {};
   const groups = { dinner: noteEntriesFrom('dinner', dsh.dinner && dsh.dinner.orders), breakfast: noteEntriesFrom('breakfast', dsh.breakfast && dsh.breakfast.orders), lunch: noteEntriesFrom('lunch', dsh.lunch && dsh.lunch.orders) };
   state._chefNotesHtml = notesCardHtml(groups, { dinnerDate: dsh.dinnerDate, breakfastDate: dsh.breakfastDate || (dsh.breakfast && dsh.breakfast.serviceDate), lunchDate: dsh.lunchDate || (dsh.lunch && dsh.lunch.serviceDate) });
@@ -1834,7 +1787,7 @@ async function v3LoadChefNotes(){
 }
 async function v3RenderChefRequests(){
   const canAll = v3CanChef();
-  $('#main-content').innerHTML = v3Page(v3Back(v3CanChef()?'chef':'more', v3CanChef()?'Chef':'More') +
+  $('#main-content').innerHTML = v3Page(v3RoleBack('kitchen') +
     (canAll ? '<div class="grid grid-cols-2 gap-2"><button type="button" id="cr-acc-all" class="btn-primary rounded-xl py-2.5 text-sm text-white font-semibold"><i class="fa-solid fa-check-double mr-1"></i>Accept all</button>'+
       '<button type="button" id="cr-dec-all" class="rounded-xl py-2.5 text-sm border border-rose-500/40 text-rose-200"><i class="fa-solid fa-xmark mr-1"></i>Decline all</button></div>'+
       '<div class="grid grid-cols-2 gap-2"><button type="button" id="cr-print" class="rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-print mr-1"></i>Print late & special list</button>'+
@@ -1864,7 +1817,7 @@ async function v3RenderChefRequests(){
   }
 }
 async function v3RenderChefComments(){
-  $('#main-content').innerHTML = v3Page(v3Back(v3CanChef()?'chef':'more', v3CanChef()?'Chef':'More') + '<div id="cc-list" class="space-y-2">'+v3Loading()+'</div>', 'chefcomments-root');
+  $('#main-content').innerHTML = v3Page(v3RoleBack('kitchen') + '<div id="cc-list" class="space-y-2">'+v3Loading()+'</div>', 'chefcomments-root');
   const d = await v3Call('getChefFeedback', {});
   if (state.tab !== 'chefcomments' || !d) return;
   $('#cc-list').innerHTML = (d.feedback||[]).length ? d.feedback.map(function(f){
@@ -1879,30 +1832,109 @@ async function v3RenderChefComments(){
       const r = await v3Call('markChefFeedback', { id: b.dataset.id, status:'done', chefNote: v.chefNote }, 'Closed'); if (r) v3RenderChefComments(); return !!r; });
   }; });
 }
+/** Kitchen Admin: all 7 dinner menus on one page (add, rename, reorder, hide, delete). The staff order list for a date shows ONLY that weekday's dishes. */
 async function v3RenderMenuEditor(){
-  const wd = state.menuWd != null ? state.menuWd : addFijiDays(getFijiNow(),1).getUTCDay();
-  $('#main-content').innerHTML = v3Page(v3Back(v3CanChef()?'chef':'more', v3CanChef()?'Chef':'More') +
-    '<div class="grid grid-cols-7 gap-1">'+[1,2,3,4,5,6,0].map(function(i){ return '<button type="button" class="v3-wd rounded-lg py-2 text-[11px] '+(i===wd?'bg-teal-600 text-white font-semibold':'bg-slate-800/70 text-slate-300')+'" data-wd="'+i+'">'+WEEKDAY_NAMES[i].slice(0,3)+'</button>'; }).join('')+'</div>'+
-    '<section class="glass rounded-2xl p-4 space-y-2 min-w-0">'+v3Title('fa-utensils', esc(WEEKDAY_NAMES[wd])+' dinner menu')+'<div id="me-list">'+v3Loading()+'</div>'+
-    '<div class="flex gap-2 pt-2"><input id="me-new" class="ui-input flex-1 min-w-0" maxlength="80" placeholder="Add a dish"/><button type="button" id="me-add" class="btn-primary rounded-xl px-4 text-sm text-white font-semibold">Add</button></div></section>'+
-    '<p class="text-[10px] text-slate-400 px-1">Dishes with the most dislikes are good candidates to replace. Burger and pizza are daily items and are not voted on.</p>', 'chefmenu-root');
-  $$('.v3-wd').forEach(function(b){ b.onclick = function(){ state.menuWd = Number(b.dataset.wd); v3RenderMenuEditor(); }; });
-  const [m, w] = await Promise.all([api('getDinnerMenus', { weekday: wd, includeInactive:true }).catch(function(){ return null; }), api('getWeeklyMenu', {}).catch(function(){ return null; })]);
+  const order = [1,2,3,4,5,6,0], tomWd = addFijiDays(getFijiNow(),1).getUTCDay();
+  $('#main-content').innerHTML = v3Page(v3RoleBack('kitchen') +
+    '<p class="text-[11px] text-slate-400 px-1">Staff ordering for a dinner date see only that weekday\'s dishes (e.g. Tuesday\'s dinner shows Tuesday\'s menu). Tomorrow is <strong class="text-slate-200">'+esc(WEEKDAY_NAMES[tomWd])+'</strong>.</p>'+
+    '<div class="flex gap-1 overflow-x-auto pb-1" id="me-jump">'+order.map(function(i){ return '<a href="#me-day-'+i+'" class="shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] '+(i===tomWd?'bg-teal-600 text-white font-semibold':'bg-slate-800/70 text-slate-300')+'">'+WEEKDAY_NAMES[i].slice(0,3)+'</a>'; }).join('')+'</div>'+
+    '<div id="me-days" class="space-y-3">'+v3Card(v3Loading())+'</div>', 'chefmenu-root');
+  $$('#me-jump a').forEach(function(a){ a.onclick = function(e){ e.preventDefault(); const el = document.querySelector(a.getAttribute('href')); if (el) el.scrollIntoView({ block:'start', behavior:'smooth' }); }; });
+  const [m, w] = await Promise.all([api('getDinnerMenus', { includeInactive:true }).catch(function(){ return null; }), api('getWeeklyMenu', {}).catch(function(){ return null; })]);
   if (state.tab !== 'chefmenu') return;
-  const items = ((m && m.data && (m.data.items || m.data.serviceItems)) || []).filter(function(it){ return Number(it.weekday) === wd; });
-  const tally = {}; ((w && w.data && w.data.days) || []).forEach(function(d){ d.items.forEach(function(it){ tally[String(it.dish).toLowerCase()] = it; }); });
-  $('#me-list').innerHTML = items.length ? items.map(function(it){
-    const t = tally[String(it.itemName).toLowerCase()] || { likes:0, dislikes:0 };
-    const daily = /burger|pizza/i.test(it.itemName);
-    return '<div class="v3-row py-2 border-b border-slate-700/40 last:border-0 min-w-0"><div class="min-w-0"><p class="text-sm text-slate-100 break-words">'+esc(it.itemName)+(it.active===false?' <span class="text-[10px] text-slate-500">(hidden)</span>':'')+'</p>'+
-      '<p class="text-[10px] text-slate-400">'+(daily ? 'Daily item' : '<i class="fa-solid fa-thumbs-up text-teal-300"></i> '+t.likes+' · <i class="fa-solid fa-thumbs-down text-rose-300"></i> '+t.dislikes)+'</p></div>'+
-      '<div class="flex gap-1 shrink-0"><button type="button" class="v3-me-ren rounded-lg px-2 py-1 text-[11px] border border-slate-600 text-slate-200" data-id="'+esc(it.id)+'" data-name="'+esc(it.itemName)+'">Rename</button>'+
-      '<button type="button" class="v3-me-del rounded-lg px-2 py-1 text-[11px] border border-rose-500/40 text-rose-200" data-id="'+esc(it.id)+'">Delete</button></div></div>';
-  }).join('') : v3Empty('No dishes for this day.');
-  const done = function(){ cacheInvalidate(['weeklyMenu', 'dinnerMenus:'+dinnerCutoffInfo().serviceDate]); v3RenderMenuEditor(); };
-  $('#me-add').onclick = async function(){ const n = $('#me-new').value.trim(); if (!n) { toast('Type a dish name','error'); return; } const r = await v3Call('saveDinnerMenuItem', { weekday: wd, itemName: n, sortOrder: items.length + 1 }, 'Dish added'); if (r) done(); };
-  $$('.v3-me-ren').forEach(function(b){ b.onclick = function(){ v3Form('Rename dish', [{ id:'itemName', label:'Dish name', value: b.dataset.name, required:true, max:80 }], 'Save', async function(v){ const r = await v3Call('saveDinnerMenuItem', { id: b.dataset.id, weekday: wd, itemName: v.itemName }, 'Saved'); if (r) done(); return !!r; }); }; });
-  $$('.v3-me-del').forEach(function(b){ b.onclick = async function(){ if (!confirm('Delete this dish from '+WEEKDAY_NAMES[wd]+'?')) return; const r = await v3Call('deleteDinnerMenuItem', { id: b.dataset.id }, 'Deleted'); if (r) done(); }; });
+  if (!m || !m.success) { $('#me-days').innerHTML = v3Card('<p class="text-sm text-rose-300">'+esc((m && m.error) || 'Could not load menus')+'</p>'); return; }
+  const all = (m.data && (m.data.items || m.data.serviceItems)) || [];
+  const tally = {}; ((w && w.data && w.data.days) || []).forEach(function(d){ (d.items||[]).forEach(function(it){ tally[String(it.dish).toLowerCase()] = it; }); });
+  const so = function(x){ const n = Number(x.sortOrder); return isFinite(n) ? n : 99; };
+  $('#me-days').innerHTML = order.map(function(wd){
+    const items = all.filter(function(it){ return Number(it.weekday) === wd; }).sort(function(a, b){ return so(a) - so(b); });
+    return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0 scroll-mt-20" id="me-day-'+wd+'" data-wd="'+wd+'">'+v3Title('fa-utensils', esc(WEEKDAY_NAMES[wd]), wd===tomWd ? v3Chip('Tomorrow','ok') : v3Chip(String(items.filter(function(i){ return i.active !== false && String(i.active) !== 'false'; }).length)+' dishes','mute'))+
+      (items.length ? items.map(function(it, idx){
+        const t = tally[String(it.itemName).toLowerCase()] || { likes:0, dislikes:0 };
+        const hidden = it.active === false || String(it.active) === 'false';
+        return '<div class="v3-row py-2 border-b border-slate-700/40 last:border-0 min-w-0" data-item="'+esc(it.id)+'"><div class="min-w-0"><p class="text-sm '+(hidden?'text-slate-500 line-through':'text-slate-100')+' break-words">'+esc(it.itemName)+'</p>'+
+          '<p class="text-[10px] text-slate-400"><i class="fa-solid fa-thumbs-up text-teal-300"></i> '+t.likes+' · <i class="fa-solid fa-thumbs-down text-rose-300"></i> '+t.dislikes+(hidden?' · hidden':'')+'</p></div>'+
+          '<div class="flex gap-1 shrink-0">'+
+          '<button type="button" class="v3-me-up rounded-lg px-1.5 py-1 text-[11px] border border-slate-600 text-slate-300" data-wd="'+wd+'" data-i="'+idx+'" aria-label="Move up"'+(idx===0?' disabled':'')+'><i class="fa-solid fa-arrow-up"></i></button>'+
+          '<button type="button" class="v3-me-ren rounded-lg px-2 py-1 text-[11px] border border-slate-600 text-slate-200" data-id="'+esc(it.id)+'" data-wd="'+wd+'" data-name="'+esc(it.itemName)+'">Rename</button>'+
+          '<button type="button" class="v3-me-hide rounded-lg px-2 py-1 text-[11px] border border-slate-600 text-slate-300" data-id="'+esc(it.id)+'" data-wd="'+wd+'" data-name="'+esc(it.itemName)+'" data-on="'+(hidden?'1':'0')+'">'+(hidden?'Show':'Hide')+'</button>'+
+          '<button type="button" class="v3-me-del rounded-lg px-2 py-1 text-[11px] border border-rose-500/40 text-rose-200" data-id="'+esc(it.id)+'" data-wd="'+wd+'" aria-label="Delete"><i class="fa-solid fa-trash"></i></button></div></div>';
+      }).join('') : v3Empty('No dishes — staff can order "Standard" on this day.'))+
+      '<div class="flex gap-2 pt-1"><input id="me-new-'+wd+'" class="ui-input flex-1 min-w-0" maxlength="80" placeholder="Add a dish for '+esc(WEEKDAY_NAMES[wd])+'"/><button type="button" class="v3-me-add btn-primary rounded-xl px-4 text-sm text-white font-semibold" data-wd="'+wd+'">Add</button></div></section>';
+  }).join('');
+  const byWd = function(wd){ return all.filter(function(it){ return Number(it.weekday) === Number(wd); }).sort(function(a, b){ return so(a) - so(b); }); };
+  const done = function(){ cacheInvalidate(['weeklyMenu', 'dinnerMenus:'+dinnerCutoffInfo().serviceDate, 'dinnerMenus:'+fijiDateString()]); v3RenderMenuEditor(); };
+  $$('.v3-me-add').forEach(function(b){ b.onclick = async function(){ const wd = Number(b.dataset.wd), inp = $('#me-new-'+wd), n = inp.value.trim(); if (!n) { toast('Type a dish name','error'); inp.focus(); return; }
+    b.disabled = true; const r = await v3Call('saveDinnerMenuItem', { weekday: wd, itemName: n, sortOrder: byWd(wd).length + 1, active: true }, 'Dish added to '+WEEKDAY_NAMES[wd]); b.disabled = false; if (r) done(); }; });
+  $$('.v3-me-ren').forEach(function(b){ b.onclick = function(){ v3Form('Rename dish ('+WEEKDAY_NAMES[b.dataset.wd]+')', [{ id:'itemName', label:'Dish name', value: b.dataset.name, required:true, max:80 }], 'Save', async function(v){ const r = await v3Call('saveDinnerMenuItem', { id: b.dataset.id, weekday: Number(b.dataset.wd), itemName: v.itemName }, 'Saved'); if (r) done(); return !!r; },
+    'Orders already placed keep the old name — they are listed under "Not on the menu" if the old name is gone.'); }; });
+  $$('.v3-me-hide').forEach(function(b){ b.onclick = async function(){ const on = b.dataset.on === '1'; const r = await v3Call('saveDinnerMenuItem', { id: b.dataset.id, weekday: Number(b.dataset.wd), itemName: b.dataset.name, active: on }, on ? 'Shown again' : 'Hidden from staff'); if (r) done(); }; });
+  $$('.v3-me-del').forEach(function(b){ b.onclick = async function(){ if (!confirm('Delete this dish from '+WEEKDAY_NAMES[b.dataset.wd]+'?')) return; const r = await v3Call('deleteDinnerMenuItem', { id: b.dataset.id }, 'Deleted'); if (r) done(); }; });
+  $$('.v3-me-up').forEach(function(b){ b.onclick = async function(){
+    const list = byWd(b.dataset.wd), i = Number(b.dataset.i); if (i < 1) return;
+    const tmp = list[i-1]; list[i-1] = list[i]; list[i] = tmp;
+    b.disabled = true;
+    for (let k = 0; k < list.length; k++) { if (so(list[k]) !== k + 1) { const r = await v3Call('saveDinnerMenuItem', { id: list[k].id, weekday: Number(b.dataset.wd), itemName: list[k].itemName, sortOrder: k + 1 }); if (!r) break; } }
+    done();
+  }; });
+}
+/** Cancel one order with a reason (stored on the order). The staff member is notified in-app; admin / superadmin can
+ *  also choose another user to notify and add a message, or send no notification. */
+function v3AdminCancelForm(id, meal, name, after, reasonDefault){
+  const admin = v3IsAdmin();
+  const fields = [{ id:'reason', label:'Reason (stored on the order, the staff member sees it)', value: reasonDefault || '', required:true, max:200 }];
+  if (admin) fields.push({ id:'notifyEmail', label:'Also notify another user (email, optional)', type:'email', max:120 }, { id:'message', label:'Message in the notification (optional)', type:'textarea', max:300 },
+    { id:'silent', label:'Do not send any notification', type:'checkbox' });
+  v3Form('Cancel '+name+'\'s '+(V3_MEAL_LABEL[meal]||meal).toLowerCase(), fields, 'Cancel order', async function(v){
+    const p = { id: id, meal: meal, reason: v.reason };
+    if (admin) { if (v.notifyEmail) p.notifyEmail = String(v.notifyEmail).trim(); if (v.message) p.message = v.message; if (v.silent) p.notify = 'false'; }
+    const r = await v3Call('adminCancelMealOrder', p);
+    if (r) { toast('Cancelled'+(r.notified ? ' — notified '+r.notified : ' — no notification sent'),'ok'); if (after) after(); }
+    return !!r;
+  }, admin ? 'The staff member gets an in-app notification with the reason unless you tick "Do not send".' : name+' gets an in-app notification with the reason.');
+}
+/** Kitchen Admin: meal times (cutoffs + late windows). Changes apply straight away for everyone. */
+async function v3RenderMealTimes(){
+  const t = mealTimesNow();
+  const f = function(k, label, hint){ return '<div class="space-y-1 min-w-0"><label for="mt-'+k+'" class="text-[11px] text-slate-400">'+label+'</label><input type="time" id="mt-'+k+'" class="ui-input w-full" value="'+esc(t[k]||'')+'" data-k="'+k+'"/>'+(hint?'<p class="text-[10px] text-slate-500">'+hint+'</p>':'')+'</div>'; };
+  $('#main-content').innerHTML = v3Page(v3RoleBack('kitchen') +
+    v3Card(v3Title('fa-moon','Dinner')+f('dinner_cutoff','Orders close (the day before)','Default 23:55 — staff can order, change or cancel until then.')+f('late_close_dinner','Late requests close (on the dinner day)','Default 08:00 — late requests are approved automatically at this time and the summary PDF is saved again.'), 'mt-dinner')+
+    v3Card(v3Title('fa-mug-saucer','Breakfast')+f('breakfast_cutoff','Orders close (the day before)','')+f('late_close_breakfast','Late requests close','00:00 = midnight (start of the breakfast day).'), 'mt-breakfast')+
+    v3Card(v3Title('fa-bowl-food','Lunch')+f('lunch_cutoff','Orders close (the day before)','')+f('late_close_lunch','Late requests close','00:00 = midnight (start of the lunch day).'), 'mt-lunch')+
+    '<button type="button" id="mt-save" class="btn-primary w-full rounded-xl py-3 text-sm font-semibold text-white">Save meal times</button>'+
+    '<button type="button" id="mt-run" class="w-full rounded-xl py-2.5 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-bolt mr-1"></i>Run the auto-approve check now</button>'+
+    '<p class="text-[10px] text-slate-500 px-1">All times are Fiji time, 24-hour. The app checks the cutoffs every few minutes and whenever someone opens it.</p>', 'mealtimes-root');
+  $('#mt-save').onclick = async function(){
+    const p = {}; $$('#mealtimes-root input[type=time]').forEach(function(i){ if (i.value) p[i.dataset.k] = i.value; });
+    this.disabled = true;
+    const d = await v3Call('setMealTimes', p, 'Meal times saved');
+    this.disabled = false;
+    if (d && d.mealTimes) { state.mealTimes = d.mealTimes; try { localStorage.setItem('pcrtest_v3_mealtimes', JSON.stringify(d.mealTimes)); } catch (e) {} cacheInvalidate(['v3home']); v3RenderMealTimes(); }
+  };
+  $('#mt-run').onclick = async function(){ const d = await v3Call('runMealTick', {}); if (d) toast('Checked — '+((d.dinnerLateApproved||0)+(d.breakfastLateApproved||0)+(d.lunchLateApproved||0))+' late request(s) approved'+(d.cutoffApproved?' · '+d.cutoffApproved+' dinner order(s) confirmed':''), 'ok'); };
+  const d = await v3Call('getMealTimes', {});
+  if (d && state.tab === 'mealtimes' && d.times) { state.mealTimes = d; Object.keys(d.times).forEach(function(k){ const i = $('#mt-'+k); if (i && document.activeElement !== i) i.value = d.times[k]; }); }
+}
+/** Kitchen Admin: dinner orders whose dish is not on that date's menu — cancel with a reason (the staff member is notified). */
+async function v3RenderOffMenu(){
+  const sd = state.offDate || dinnerCutoffInfo().serviceDate;
+  $('#main-content').innerHTML = v3Page(v3RoleBack('kitchen') +
+    '<section class="glass rounded-2xl p-4 space-y-2 min-w-0">'+v3Title('fa-triangle-exclamation','Dinner orders not on the menu')+
+    '<p class="text-[11px] text-slate-400">They still count in the lists (flagged) until you cancel them. Cancelling notifies the staff member so they can re-order from the right menu.</p>'+
+    '<div class="flex gap-2"><input type="date" id="om-date" class="ui-input flex-1 min-w-0" value="'+esc(sd)+'"/><button type="button" id="om-go" class="btn-primary rounded-xl px-4 text-sm text-white font-semibold">Show</button></div></section>'+
+    '<div id="om-list">'+v3Card(v3Loading())+'</div>', 'offmenu-root');
+  $('#om-go').onclick = function(){ state.offDate = $('#om-date').value; v3RenderOffMenu(); };
+  const d = await v3Call('listOffMenuOrders', { serviceDate: sd });
+  if (state.tab !== 'offmenu' || !d) return;
+  const wd = WEEKDAY_NAMES[new Date(sd+'T00:00:00Z').getUTCDay()];
+  $('#om-list').innerHTML = v3Card('<p class="text-[11px] text-slate-400">'+esc(wd)+' '+esc(sd)+' menu: '+(d.menu.length ? d.menu.map(esc).join(' · ') : 'none set (any dish is accepted)')+'</p>'+
+    (d.orders.length ? d.orders.map(function(o){
+      return '<div class="v3-row py-2 border-t border-slate-700/40 min-w-0" data-off="'+esc(o.id)+'"><div class="min-w-0"><p class="text-sm text-slate-100 truncate">'+esc(o.userName)+' <span class="text-[10px] text-slate-400">· '+esc(o.department||'')+'</span></p><p class="text-[11px] text-amber-200 break-words">'+esc(o.mealChoice)+'</p><p class="text-[10px] text-slate-500">'+v3Status(o.status)+' · ordered '+esc(v3Ts(o.createdAt))+'</p></div>'+
+        '<button type="button" class="v3-off-cancel shrink-0 rounded-lg px-2 py-1.5 text-[11px] border border-rose-500/40 text-rose-200" data-id="'+esc(o.id)+'" data-name="'+esc(o.userName)+'">Cancel & notify</button></div>';
+    }).join('') : v3Empty('All dinner orders for this date are on the menu.')), 'om-card');
+  $$('.v3-off-cancel').forEach(function(b){ b.onclick = function(){
+    v3AdminCancelForm(b.dataset.id, 'dinner', b.dataset.name, function(){ cacheInvalidate(['kitchenDashboard']); v3RenderOffMenu(); }, 'Not on '+wd+'\'s menu – please re-order from '+wd+'\'s menu');
+  }; });
 }
 /* reports + roster compare */
 function v3ParseCsv(text){
@@ -1937,8 +1969,8 @@ async function v3RenderChefReports(){
   const today = fijiDateString();
   const st = state.rep || { period:'weekly', from: fijiDateString(addFijiDays(getFijiNow(), -6)), to: fijiDateString(addFijiDays(getFijiNow(), 1)), meal:'all' };
   state.rep = st;
-  $('#main-content').innerHTML = v3Page(v3Back(v3CanChef()?'chef':'more', v3CanChef()?'Chef':'More') +
-    '<section class="glass rounded-2xl p-4 space-y-2 min-w-0">'+v3Title('fa-chart-column','Meal report')+
+  $('#main-content').innerHTML = v3Page(v3RoleBack('kitchen') +
+    '<section class="glass rounded-2xl p-4 space-y-2 min-w-0">'+v3Title('fa-chart-column','Meal statistics')+
     '<div class="grid grid-cols-3 gap-1 rounded-xl bg-slate-900/60 p-1">'+['daily','weekly','monthly'].map(function(p){ return '<button type="button" class="v3-per rounded-lg py-1.5 text-xs '+(st.period===p?'bg-teal-600 text-white font-semibold':'text-slate-300')+'" data-p="'+p+'">'+p[0].toUpperCase()+p.slice(1)+'</button>'; }).join('')+'</div>'+
     '<div class="grid grid-cols-2 gap-2"><label class="text-[10px] text-slate-400 space-y-1 min-w-0"><span>From</span><input type="date" id="rp-from" class="ui-input w-full min-w-0" value="'+st.from+'"/></label><label class="text-[10px] text-slate-400 space-y-1 min-w-0"><span>To</span><input type="date" id="rp-to" class="ui-input w-full min-w-0" value="'+st.to+'"/></label></div>'+
     '<select id="rp-meal" class="ui-input w-full">'+[['all','All meals'],['breakfast','Breakfast'],['lunch','Lunch'],['dinner','Dinner']].map(function(o){ return '<option value="'+o[0]+'"'+(st.meal===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')+'</select>'+
@@ -1947,7 +1979,7 @@ async function v3RenderChefReports(){
     '<p class="text-[11px] text-slate-400">Upload the weekly roster (CSV or Excel: name, department, date, start, end, dayOff). Staff on the roster and not on a day off are "expected on the island" for each meal.</p>'+
     '<input type="file" id="rp-file" accept=".csv,.xlsx,.xls,text/csv" class="block w-full text-xs text-slate-300"/>'+
     '<p id="rp-roster-info" class="text-[11px] text-teal-300">'+(state.repRoster ? esc(state.repRoster.name)+' · '+state.repRoster.count+' shifts loaded' : '')+'</p></section>'+
-    '<div id="rp-out" class="space-y-3"></div>', 'chefreports-root');
+    '<div id="rp-out" class="space-y-3"></div>', 'mealstats-root');
   $$('.v3-per').forEach(function(b){ b.onclick = function(){
     const p = b.dataset.p; st.period = p;
     if (p === 'daily') { st.from = today; st.to = today; }
@@ -1969,11 +2001,12 @@ async function v3RenderChefReports(){
     st.from = $('#rp-from').value; st.to = $('#rp-to').value; st.meal = $('#rp-meal').value;
     $('#rp-out').innerHTML = v3Card(v3Loading());
     const d = await v3Call('getMealReport', { from: st.from, to: st.to, meal: st.meal });
-    if (!d || state.tab !== 'chefreports') { $('#rp-out').innerHTML = ''; return; }
+    if (!d || state.tab !== 'mealstats') { $('#rp-out').innerHTML = ''; return; }
     state.repData = d; v3PaintReport(d);
   };
   if (state.repData) v3PaintReport(state.repData);
 }
+function v3RenderMealStats(){ return v3RenderChefReports(); }
 function v3ReportRows(d){
   const exp = state.repRoster ? state.repRoster.expected : null;
   const rows = [];
@@ -2008,29 +2041,88 @@ function v3PaintReport(d){
 function v3ManageGroups(){
   const h = v3Home(), hb = h.hodBar || {}, sd = (h.superDash && h.superDash.pending) || {};
   const g = function(title, rows){ return '<section class="space-y-1.5 min-w-0"><h3 class="v3-section-title px-1">'+title+'</h3><div class="glass rounded-2xl overflow-hidden">'+rows+'</div></section>'; };
-  let html = g('Approvals', v3Row(v3Nav('approvals'),'fa-inbox','Approvals inbox','Leave, late & special meals, join requests', (hb.leave||0)+(hb.leaveMgmt||0)+(hb.late||0)+(hb.joins||0)) +
+  let html = g('Approvals', v3Row(v3Nav('approvals'),'fa-inbox','Approvals inbox','Leave, late & special meals', (hb.leave||0)+(hb.leaveMgmt||0)+(hb.late||0)) +
     v3Row("state.leaveTabForce='final';navigate('leave')",'fa-stamp','Leave — final approval','After the HOD step', hb.leaveMgmt||sd.leaveMgmt||0));
-  html += g('People', v3Row(v3Nav('usersv3'),'fa-users-gear','Users & roles','Edit, delete, roles, departments, assistant HOD') +
-    v3Row(v3Nav('deptstaff'),'fa-people-group','Departments','Join requests and staff per department', hb.joins||0) +
+  html += g('Role pages', v3Row(v3Nav('adminhub'),'fa-user-shield','Admin Settings','Users & roles, leave, reminders, reports') +
+    v3Row(v3Nav('kitchenadmin'),'fa-fire-burner','Kitchen Admin','Lists, menus, requests, meal times', h.chef ? h.chef.pending.late + h.chef.pending.special : 0) +
+    v3Row(v3Nav('boatadmin'),'fa-anchor','Boat Admin','Runs, passengers, emergency travel') +
+    v3Row(v3Nav('deptadmin'),'fa-people-group','Department Admin','Any department: staff, updates, leave'));
+  html += g('People', v3Row(v3Nav('usersv3'),'fa-users-gear','Users & roles','Edit, delete, roles (more than one allowed), departments') +
     v3Row(v3Nav('leavecal'),'fa-calendar-days','Leave calendar','Month view · approved and waiting') +
-    v3Row(v3Nav('users'),'fa-address-book','Staff directory (classic)','2.x list · add user, import CSV, pending sign-ups'));
-  if (v3IsSuper()) html += g('Stations', v3Row(v3Nav('chef'),'fa-fire-burner','Chef page','Open as superadmin — actions are in your name', h.chef ? h.chef.pending.late + h.chef.pending.special : 0) +
-    v3Row(v3Nav('stboat'),'fa-ship','Boat page','Bookings, passengers, runs, boat tools') +
-    v3Row(v3Nav('stations'),'fa-key','Station logins','Chef & Boat usernames, passwords, sign out devices'));
-  else if (v3CanChef() || v3HasBoat()) html += g('Kitchen & boat tools', (v3CanChef() ? v3Row(v3Nav('chef'),'fa-fire-burner','Chef page','') : '') + (v3HasBoat() ? v3Row(v3Nav('stboat'),'fa-ship','Boat page','') : ''));
-  html += g('Communication', v3Row(v3Nav('reminders'),'fa-bell','Reminders','Add, edit, remove') + v3Row(v3Nav('suggestions'),'fa-lightbulb','Suggestions','Approve / reject') +
-    v3Row(v3Nav('deptupdates'),'fa-bullhorn','Department updates',''));
-  html += g('Reports & system', v3Row(v3Nav('adminstatus'),'fa-file-arrow-down','Admin status & reports','Download all app data') +
-    v3Row(v3Nav('snapshots'),'fa-box-archive','Meal summaries','Breakfast, lunch & dinner · last 5 days · PDF / print') +
-    (v3IsSuper() ? v3Row(v3Nav('settings'),'fa-gear','App settings','Email sender, features, alert emails') : ''));
+    v3Row(v3Nav('users'),'fa-address-book','Staff directory (classic)','2.x list · add user, import CSV'));
+  html += g('Communication', v3Row(v3Nav('reminders'),'fa-bell','Reminders','Add, edit, remove') + v3Row(v3Nav('suggestions'),'fa-lightbulb','Suggestions','Approve / reject'));
+  html += g('Reports & system', v3Row(v3Nav('adminstatus'),'fa-file-arrow-down','Reports & downloads','Download all app data') +
+    (v3IsSuper() ? v3Row(v3Nav('settings'),'fa-gear','App settings','Email (Brevo), test email, features, alert emails') + v3Row(v3Nav('migrate'),'fa-right-left','Role migration','Preview / apply the 3.0.0 roles list') : ''));
   return html;
 }
 function v3RenderManage(){ $('#main-content').innerHTML = v3Page(v3ManageGroups(), 'manage-root'); }
+/** Admin Settings (admin + superadmin): people, leave, reminders, reports. */
+function v3RenderAdminHub(){
+  const h = v3Home(), hb = h.hodBar || {};
+  const g = function(title, rows){ return '<section class="space-y-1.5 min-w-0"><h3 class="v3-section-title px-1">'+title+'</h3><div class="glass rounded-2xl overflow-hidden">'+rows+'</div></section>'; };
+  let html = v3Back('more','More');
+  html += g('People', v3Row(v3Nav('usersv3'),'fa-users-gear','Users & roles','Give people one or more roles, departments, active') +
+    v3Row(v3Nav('users'),'fa-address-book','Staff directory (classic)','Add user, import CSV'));
+  html += g('Leave', v3Row("state.leaveTabForce='final';navigate('leave')",'fa-stamp','Leave — final approval','After the HOD step', hb.leaveMgmt||0) +
+    v3Row(v3Nav('leavecal'),'fa-calendar-days','Leave calendar','All departments') + v3Row(v3Nav('leavesummary'),'fa-table','Leave summary','Per department'));
+  html += g('Communication', v3Row(v3Nav('reminders'),'fa-bell','Reminders','Add, edit, remove') + v3Row(v3Nav('suggestions'),'fa-lightbulb','Suggestions','Approve / reject'));
+  html += g('Reports', v3Row(v3Nav('adminstatus'),'fa-file-arrow-down','Reports & downloads','Meals, boats, leave, users (CSV)'));
+  $('#main-content').innerHTML = v3Page(html, 'adminhub-root');
+}
+/** Department Admin (HOD / assistant HOD; admin sees every department). */
+function v3RenderDeptAdmin(){
+  const hb = v3Home().hodBar || {};
+  $('#main-content').innerHTML = v3Page(v3Back('more','More') +
+    '<p class="text-xs text-slate-400 px-1">'+(v3IsAdmin() ? 'All departments (admin)' : esc(state.user.department||''))+'</p>'+
+    v3HodBar()+
+    '<div class="grid grid-cols-2 gap-2" id="dept-tiles">'+
+      v3Tile(v3Nav('approvals'),'fa-inbox','Approvals','Leave & late meals', (hb.leave||0)+(hb.late||0)+(v3IsAdmin()?(hb.leaveMgmt||0):0))+
+      v3Tile(v3Nav('deptstaff'),'fa-users','Department staff','Edit · remove')+
+      v3Tile(v3Nav('deptupdatespost'),'fa-bullhorn','Department updates','Post, comments, likes')+
+      v3Tile(v3Nav('leavecal'),'fa-calendar-days','Leave calendar','Month view')+
+      v3Tile(v3Nav('leavesummary'),'fa-table','Leave summary','Totals & list')+
+      v3Tile(v3Nav('mealbehalf'),'fa-star','Meal on behalf','Staff without a phone')+'</div>', 'deptadmin-root');
+  v3RefreshHome().then(function(){ if (state.tab === 'deptadmin') { const el = $('#v3-hodbar'); if (el) el.outerHTML = v3HodBar(); } }).catch(function(){});
+}
+async function v3RenderLeaveSummary(){
+  $('#main-content').innerHTML = v3Page((state._roleMode === 'admin' ? v3RoleBack('admin') : v3RoleBack('dept')) + '<div id="ls-body">'+v3Card(v3Loading())+'</div>', 'leavesummary-root');
+  const d = await v3Call('getHodLeaveSummary', {});
+  if (state.tab !== 'leavesummary' || !d) return;
+  const rows = d.requests || d.rows || [];
+  const counts = d.counts || d.byStatus || {};
+  $('#ls-body').innerHTML = v3Card(v3Title('fa-table','Leave · '+esc(d.department||d.deptLabel||'All'))+
+    '<div class="grid grid-cols-3 gap-2">'+Object.keys(counts).map(function(k){ return '<div class="rounded-xl bg-slate-900/50 border border-slate-700/60 p-2 min-w-0"><p class="text-[10px] text-slate-400 truncate">'+esc(V3_STATUS_TEXT[k]||k)+'</p><p class="text-lg font-semibold text-slate-100">'+counts[k]+'</p></div>'; }).join('')+'</div>'+
+    (rows.length ? rows.slice(0, 100).map(function(l){ return '<div class="v3-row py-1.5 border-b border-slate-700/40 last:border-0 text-xs min-w-0"><div class="min-w-0"><p class="text-slate-100 truncate">'+esc(l.userName||l.userEmail)+' · '+esc(l.leaveType||'')+'</p><p class="text-[10px] text-slate-500">'+esc(l.startDate||'')+(l.endDate && l.endDate!==l.startDate?' → '+esc(l.endDate):'')+'</p></div>'+v3Status(l.status)+'</div>'; }).join('') : v3Empty('No leave requests.'))+
+    '<button type="button" id="ls-csv" class="w-full rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-download mr-1"></i>Download CSV</button>', 'ls-card');
+  $('#ls-csv').onclick = function(){ v3Download('leave-summary-'+fijiDateString()+'.csv', rows); };
+}
+const v3RenderMealBehalf = function(){ return v3RenderSpecialPage(); };
+/** Superadmin: 3.0.0 role migration — preview (no changes), then apply (backs up the Users tab first). */
+async function v3RenderMigrate(){
+  $('#main-content').innerHTML = v3Page(v3Back('manage','Manage') + v3Card(v3Title('fa-right-left','Role migration (3.0.0)')+
+    '<p class="text-xs text-slate-300">Writes each person\'s roles into the <strong>roles</strong> column from their current role / permissions / assistant HOD flag. Nobody gains or loses a role. Apply makes a copy of the Users tab first.</p>'+
+    '<div class="grid grid-cols-2 gap-2"><button type="button" id="mg-preview" class="rounded-xl py-2.5 text-xs border border-teal-500/40 text-teal-200"><i class="fa-solid fa-eye mr-1"></i>Preview</button><button type="button" id="mg-apply" class="rounded-xl py-2.5 text-xs border border-rose-500/40 text-rose-200">Apply…</button></div>', 'mg-card')+'<div id="mg-out"></div>', 'migrate-root');
+  const show = function(d){
+    const users = d.users || [], changed = users.filter(function(x){ return !x.unchanged; }), shared = users.filter(function(x){ return x.sharedLooking; });
+    $('#mg-out').innerHTML = v3Card(v3Title('fa-list', (d.dryRun ? 'Preview' : 'Applied')+' · '+users.length+' accounts with a role', v3Chip(changed.length+' to write', changed.length?'warn':'ok'))+
+      (d.backupTab ? '<p class="text-[11px] text-emerald-300">Backup tab: '+esc(d.backupTab)+'</p>' : '')+
+      (shared.length ? '<p class="text-[11px] text-amber-200"><i class="fa-solid fa-triangle-exclamation mr-1"></i>'+shared.length+' account(s) look shared (e.g. kitchen@ / boat@) — check they should keep their role.</p>' : '')+
+      users.map(function(x){ return '<div class="text-[11px] py-1 border-b border-slate-700/40 last:border-0 min-w-0"><span class="text-slate-100">'+esc(x.name||x.email)+'</span> <span class="text-slate-400">· '+esc(x.department||'—')+(x.active?'':' · inactive')+'</span>'+(x.sharedLooking?' '+v3Chip('shared?','warn'):'')+
+        '<br><span class="text-slate-400">'+esc(x.legacy.permissions||x.legacy.role||'')+(String(x.legacy.assistantHod)==='true'?' + asst HOD':'')+'</span> → <span class="text-teal-200">'+esc(x.roles.join(', '))+'</span> <span class="text-slate-500">('+esc((x.buttons||[]).join(', ')||'no buttons')+')</span></div>'; }).join(''), 'mg-list');
+  };
+  $('#mg-preview').onclick = async function(){ const d = await v3Call('migrateRoles', { dryRun: 1 }); if (d) show(d); };
+  $('#mg-apply').onclick = async function(){
+    const d0 = await v3Call('migrateRoles', { dryRun: 1 }); if (!d0) return; show(d0);
+    if (!confirm('Write the roles column for '+d0.count+' account(s)? A backup copy of the Users tab is made first.')) return;
+    const pass = await askPasscode('super'); if (!pass) return;
+    const d = await v3Call('migrateRoles', { dryRun: 0, passcode: pass }, 'Roles written'); if (d) show(d);
+  };
+}
 async function v3RenderUsers(){
   const f = state.uf || { q:'', role:'', dept:'' }; state.uf = f;
-  $('#main-content').innerHTML = v3Page(v3Back('manage','Manage') +
+  $('#main-content').innerHTML = v3Page((v3IsSuper() ? v3Back('manage','Manage') : v3RoleBack('admin')) +
     '<section class="glass rounded-2xl p-3 space-y-2 min-w-0"><input id="uf-q" class="ui-input w-full" placeholder="Search name or email" value="'+esc(f.q)+'"/>'+
-    '<div class="grid grid-cols-2 gap-2"><select id="uf-role" class="ui-input w-full min-w-0"><option value="">All roles</option>'+V3_ROLE_FILTERS.map(function(r){ return '<option value="'+r+'"'+(f.role===r?' selected':'')+'>'+V3_ROLE_LABEL[r]+'</option>'; }).join('')+'<option value="asst"'+(f.role==='asst'?' selected':'')+'>Assistant HOD</option><option value="pending"'+(f.role==='pending'?' selected':'')+'>Waiting to join</option></select>'+
+    '<div class="grid grid-cols-2 gap-2"><select id="uf-role" class="ui-input w-full min-w-0"><option value="">All roles</option>'+V3_ROLE_FILTERS.map(function(r){ return '<option value="'+r+'"'+(f.role===r?' selected':'')+'>'+V3_ROLE_LABEL[r]+'</option>'; }).join('')+'<option value="inactive"'+(f.role==='inactive'?' selected':'')+'>Inactive</option></select>'+
     '<select id="uf-dept" class="ui-input w-full min-w-0"><option value="">All departments</option>'+PCR_DEPARTMENTS.map(function(d){ return '<option'+(f.dept===d?' selected':'')+'>'+esc(d)+'</option>'; }).join('')+'</select></div></section>'+
     '<div id="uf-list" class="space-y-2">'+v3Loading()+'</div>', 'users-root');
   const r = await api('getUsers', { activeOnly:false }).catch(function(){ return null; });
@@ -2038,22 +2130,22 @@ async function v3RenderUsers(){
   if (!r || !r.success) { $('#uf-list').innerHTML = v3Card('<p class="text-sm text-rose-300">'+esc((r && r.error) || 'Could not load users')+'</p>'); return; }
   const all = r.data.users || [];
   const countBox = r.data.roleCounts ? '<section class="glass rounded-2xl p-3 space-y-2 min-w-0">'+v3Title('fa-users','Role counts')+v3RoleCountChips(r.data.roleCounts)+
-    '<p class="text-[10px] text-slate-500">Active accounts. Someone with two permissions (e.g. admin + HOD) counts in both. No limits.</p></section>' : '';
+    '<p class="text-[10px] text-slate-500">Active accounts. Someone with two roles (e.g. chef + HOD) counts in both. No limits.</p></section>' : '';
   const paint = function(){
     const q = f.q.toLowerCase();
     const list = all.filter(function(u){
       if (q && (u.email+' '+u.firstName+' '+u.lastName+' '+(u.preferredName||'')).toLowerCase().indexOf(q) < 0) return false;
       if (f.dept && u.department !== f.dept) return false;
-      if (f.role === 'asst') return !!u.assistantHod || userPerms(u).includes('assistant_hod');
-      if (f.role === 'pending') return u.deptStatus === 'pending';
-      if (f.role && v3RoleOf(u) !== f.role) return false;
+      if (f.role === 'inactive') return !u.active;
+      if (f.role === 'staff') return v3RoleLabel(u) === 'Staff';
+      if (f.role && !v3Has(f.role, u)) return false;
       return true;
     });
     $('#uf-list').innerHTML = countBox + '<p class="text-[11px] text-slate-400 px-1">'+list.length+' of '+all.length+' users</p>'+list.slice(0, 200).map(function(u){
-      const ro = v3RoleOf(u), warn = (u.warnings||[]);
+      const lab = v3RoleLabel(u), warn = (u.warnings||[]);
       return '<button type="button" class="v3-user w-full text-left glass rounded-xl p-3 min-w-0" data-email="'+esc(u.email)+'"><div class="v3-row"><p class="text-sm text-slate-100 truncate min-w-0">'+esc(fullDisplayName(u))+'</p>'+
-        '<span class="flex gap-1 shrink-0">'+v3Chip(esc(V3_ROLE_LABEL[ro]||ro), ro==='staff'?'mute':'ok')+(ro!=='hod'&&ro!=='admin'&&ro!=='super_admin'&&(u.assistantHod||userPerms(u).includes('assistant_hod'))?v3Chip('Asst HOD','info'):'')+(!u.active?v3Chip('inactive','bad'):'')+'</span></div>'+
-        '<p class="text-[11px] text-slate-400 truncate">'+esc(u.email)+' · '+esc(u.department||'—')+(u.deptStatus && u.deptStatus!=='approved'?' · <span class="text-amber-300">'+esc(u.deptStatus)+'</span>':'')+'</p>'+
+        '<span class="flex gap-1 shrink-0">'+(!u.active?v3Chip('inactive','bad'):'')+'</span></div><p class="text-[11px] '+(lab==='Staff'?'text-slate-500':'text-teal-200')+' truncate" data-roles>'+esc(lab)+'</p>'+
+        '<p class="text-[11px] text-slate-400 truncate">'+esc(u.email)+' · '+esc(u.department||'—')+'</p>'+
         (warn.length ? '<p class="text-[10px] text-amber-200 mt-1 break-words"><i class="fa-solid fa-triangle-exclamation mr-1"></i>'+esc(warn.join(' · '))+'</p>' : '')+'</button>';
     }).join('');
     $$('.v3-user').forEach(function(b){ b.onclick = function(){ v3EditUser(all.find(function(u){ return u.email === b.dataset.email; })); }; });
@@ -2065,36 +2157,40 @@ async function v3RenderUsers(){
 }
 function v3EditUser(u){
   if (!u) return;
-  const cur = userPerms(u).map(function(x){ return x === 'kitchen' ? 'chef' : x === 'boat' ? 'boat_manager' : x; });
-  if (v3Truthy(u.assistantHod) && cur.indexOf('assistant_hod') < 0) cur.push('assistant_hod');
-  const excl = v3Exclusive();
-  const opts = V3_PERM_OPTIONS.filter(function(o){ return !(excl && ['chef','boat_manager','boat_captain'].indexOf(o[0]) >= 0 && cur.indexOf(o[0]) < 0); });
+  const cur = v3Perms(u).filter(function(x){ return x !== 'staff'; });
+  const opts = V3_PERM_OPTIONS;
   const warn = (u.warnings||[]).length ? '<p class="text-amber-200 text-[11px]"><i class="fa-solid fa-triangle-exclamation mr-1"></i>'+esc(u.warnings.join(' · '))+'</p>' : '';
-  const permBox = '<div class="space-y-1 min-w-0"><p class="text-[11px] text-slate-400">Permissions (same as the live app — tick all that apply)</p><div class="grid grid-cols-2 gap-1" id="eu3-perms">'+opts.map(function(o){
+  const permBox = '<div class="space-y-1 min-w-0"><p class="text-[11px] text-slate-400">Roles — tick all that apply (everyone is also staff). Each role adds a button in More.</p><div class="grid grid-cols-2 gap-1" id="eu3-perms">'+opts.map(function(o){
     const top = o[0] === 'admin' || o[0] === 'super_admin', lock = top && !v3IsSuper();
-    return '<label class="flex items-center gap-2 text-xs text-slate-200 rounded-lg border border-slate-700/60 px-2 py-1.5 min-w-0'+(lock?' opacity-50':'')+'"><input type="checkbox" class="eu3-perm" value="'+o[0]+'"'+(cur.indexOf(o[0])>=0?' checked':'')+(lock||o[0]==='staff'?' disabled':'')+'/> <span class="truncate">'+esc(o[1])+'</span></label>';
-  }).join('')+'</div><p class="text-[10px] text-slate-500">Only a superadmin can grant or remove Admin / Superadmin. Assistant HOD = HOD approval rights for their own department.</p></div>';
+    return '<label class="flex items-center gap-2 text-xs text-slate-200 rounded-lg border border-slate-700/60 px-2 py-1.5 min-w-0'+(lock?' opacity-50':'')+'"><input type="checkbox" class="eu3-perm" value="'+o[0]+'"'+(cur.indexOf(o[0])>=0?' checked':'')+(lock?' disabled':'')+'/> <span class="truncate">'+esc(o[1])+'</span></label>';
+  }).join('')+'</div><p class="text-[10px] text-slate-500">Only a superadmin can grant or remove Admin / Superadmin (asks for the superadmin code). Assistant HOD = the same Department Admin page as the HOD.</p></div>';
   const html = '<div class="space-y-3 min-w-0"><h3 class="font-semibold text-slate-100">Edit '+esc(fullDisplayName(u))+'</h3><p class="text-xs text-slate-400 break-all">'+esc(u.email)+'</p>'+warn+permBox+
     '<div class="space-y-1 min-w-0"><label for="eu3-dept" class="text-[11px] text-slate-400">Department</label><select id="eu3-dept" class="ui-input w-full">'+(PCR_DEPARTMENTS.indexOf(u.department) >= 0 || !u.department ? PCR_DEPARTMENTS : [u.department].concat(PCR_DEPARTMENTS)).map(function(d){ return '<option'+(d===u.department?' selected':'')+'>'+esc(d)+'</option>'; }).join('')+'</select></div>'+
-    '<div class="space-y-1 min-w-0"><label for="eu3-ds" class="text-[11px] text-slate-400">Department status</label><select id="eu3-ds" class="ui-input w-full">'+[['approved','Accepted'],['pending','Waiting for HOD'],['declined','Declined'],['removed','Removed']].map(function(o){ return '<option value="'+o[0]+'"'+((u.deptStatus||'approved')===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')+'</select></div>'+
     '<label class="flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" id="eu3-active"'+(u.active?' checked':'')+'/> Account active</label>'+
     '<div class="flex gap-2 pt-1"><button type="button" id="eu3-cancel" class="flex-1 rounded-xl py-2.5 text-sm border border-slate-600 text-slate-300">Close</button><button type="button" id="eu3-save" class="flex-1 btn-primary rounded-xl py-2.5 text-sm font-semibold text-white">Save changes</button></div>'+
+    '<button type="button" id="v3-msg-user" class="text-teal-300 text-xs mr-4"><i class="fa-solid fa-bell mr-1"></i>Send an in-app notification</button>'+
     (v3IsSuper() ? '<button type="button" id="v3-del-user" class="text-rose-300 text-xs"><i class="fa-solid fa-trash mr-1"></i>Delete this user</button>' : '')+'</div>';
   openModal(html);
   $('#eu3-cancel').onclick = closeModal;
   $('#eu3-save').onclick = async function(){
-    const perms = $$('.eu3-perm').filter(function(b){ return b.checked || b.value === 'staff'; }).map(function(b){ return b.value; });
+    const roles = $$('.eu3-perm').filter(function(b){ return b.checked; }).map(function(b){ return b.value; });
     const p = { targetEmail: u.email, active: $('#eu3-active').checked ? 'true' : 'false' };
-    const same = perms.slice().sort().join(',') === cur.filter(function(x){ return opts.some(function(o){ return o[0] === x; }); }).concat(cur.indexOf('staff')<0?['staff']:[]).sort().join(',');
-    if (!same) p.permissions = perms.join(',');
-    const dept = $('#eu3-dept').value, ds = $('#eu3-ds').value;
+    const same = roles.slice().sort().join(',') === cur.slice().sort().join(',');
+    if (!same) p.roles = roles.length ? roles.join(',') : 'staff';
+    const dept = $('#eu3-dept').value;
     if (dept !== u.department) p.department = dept;
-    else if (ds !== (u.deptStatus || 'approved')) p.deptStatus = ds;
+    const top = function(l){ return l.filter(function(x){ return x === 'admin' || x === 'super_admin'; }).sort().join(','); };
+    if (!same && top(roles) !== top(cur)) { const pass = await askPasscode('super'); if (!pass) return; p.passcode = pass; }
     this.disabled = true;
     const r = await v3Call('setUserAccess', p, 'Saved');
     this.disabled = false;
     if (r && r.warnings && r.warnings.length) toast(r.warnings[0], 'info');
     if (r) { closeModal(); v3RenderUsers(); }
+  };
+  $('#v3-msg-user').onclick = function(){
+    closeModal();
+    v3Form('Notify '+fullDisplayName(u), [{ id:'title', label:'Title', value:'Message from admin', max:100 }, { id:'body', label:'Message', type:'textarea', required:true, max:600 }], 'Send', async function(v){
+      const r = await v3Call('adminNotifyUser', { targetEmail: u.email, title: v.title, body: v.body }, 'Notification sent'); return !!r; });
   };
   const del = $('#v3-del-user');
   if (del) del.onclick = async function(){
@@ -2105,7 +2201,7 @@ function v3EditUser(u){
   };
 }
 async function v3RenderReminders(){
-  $('#main-content').innerHTML = v3Page(v3Back('manage','Manage') + '<button type="button" id="rm-add" class="btn-primary w-full rounded-xl py-3 text-sm font-semibold text-white"><i class="fa-solid fa-plus mr-1"></i>Add reminder</button><div id="rm-list" class="space-y-2">'+v3Loading()+'</div>', 'reminders-root');
+  $('#main-content').innerHTML = v3Page((v3IsSuper() ? v3Back('manage','Manage') : v3RoleBack('admin')) + '<button type="button" id="rm-add" class="btn-primary w-full rounded-xl py-3 text-sm font-semibold text-white"><i class="fa-solid fa-plus mr-1"></i>Add reminder</button><div id="rm-list" class="space-y-2">'+v3Loading()+'</div>', 'reminders-root');
   const form = function(r){
     v3Form(r ? 'Edit reminder' : 'New reminder', [
       { id:'title', label:'Title', value: r && r.title, required:true, max:120 }, { id:'body', label:'Details', type:'textarea', value: r && r.body, max:1000 },
@@ -2138,7 +2234,7 @@ async function v3RenderReminders(){
 }
 async function v3RenderAdminStatus(){
   const from = state.exFrom || fijiDateString(addFijiDays(getFijiNow(), -30)), to = state.exTo || fijiDateString(addFijiDays(getFijiNow(), 1));
-  $('#main-content').innerHTML = v3Page(v3Back('manage','Manage') +
+  $('#main-content').innerHTML = v3Page((v3IsSuper() ? v3Back('manage','Manage') : v3RoleBack('admin')) +
     '<section class="glass rounded-2xl p-4 space-y-2 min-w-0">'+v3Title('fa-file-arrow-down','Generate reports')+'<div class="grid grid-cols-2 gap-2"><input type="date" id="ex-from" class="ui-input w-full min-w-0" value="'+from+'"/><input type="date" id="ex-to" class="ui-input w-full min-w-0" value="'+to+'"/></div>'+
     '<button type="button" id="ex-go" class="btn-primary w-full rounded-xl py-2.5 text-sm text-white font-semibold">Generate</button><p class="text-[10px] text-slate-400">Passwords are never included. Files are CSV (open in Excel / Google Sheets).</p></section><div id="ex-out"></div>', 'adminstatus-root');
   $('#ex-go').onclick = async function(){
@@ -2172,7 +2268,8 @@ async function v3RenderSettings(){
       '<div id="st-b" class="space-y-2'+(prov==='brevo'?'':' hidden')+'"><div class="space-y-1"><label for="st-bmail" class="text-[11px] text-slate-400">Brevo sender address (verified in Brevo)</label><input id="st-bmail" type="email" class="ui-input w-full" value="'+esc(s.brevo_sender_email||'')+'"/></div>'+
       '<p class="text-[11px] '+(s.brevo_key_set?'text-emerald-300':'text-amber-200')+'"><i class="fa-solid '+(s.brevo_key_set?'fa-check':'fa-triangle-exclamation')+' mr-1"></i>'+(s.brevo_key_set?'Brevo API key is set (Script Properties → BREVO_API_KEY)':'No Brevo API key yet — add BREVO_API_KEY in Apps Script → Project settings → Script properties. Until then mail falls back to Google.')+'</p></div>'+
       '<div class="space-y-1"><label for="st-name" class="text-[11px] text-slate-400">Sender name</label><input id="st-name" class="ui-input w-full" maxlength="60" value="'+esc(s.mail_sender_name||'PCR Staff App')+'"/></div>'+
-      '<button type="button" id="st-save" class="btn-primary w-full rounded-xl py-2.5 text-sm text-white font-semibold">Save sender</button>')+
+      '<button type="button" id="st-save" class="btn-primary w-full rounded-xl py-2.5 text-sm text-white font-semibold">Save sender</button>'+
+      '<div class="pt-2 space-y-2 border-t border-slate-700/60" id="st-test"><p class="text-[11px] text-slate-400" id="st-mailstatus">Email status: checking…</p><div class="flex gap-2"><input id="st-testto" type="email" class="ui-input flex-1 min-w-0" placeholder="Send a test to (blank = me)"/><button type="button" id="st-testgo" class="rounded-xl px-3 text-xs border border-teal-500/40 text-teal-200">Send test</button></div></div>')+
     v3Card(v3Title('fa-toggle-on','Feature flags')+'<div id="admin-body"></div>')+
     v3Card(v3Title('fa-envelope','Alert emails & other tools')+'<button type="button" onclick="openAlertEmails()" class="w-full rounded-xl py-2.5 text-sm border border-slate-600 text-slate-200">Manage alert emails</button>'+
       '<button type="button" onclick="navigate(\'admin\')" class="w-full rounded-xl py-2.5 text-sm border border-slate-600 text-slate-200">Classic admin tools (boat, kitchen, archive)</button>'), 'settings-root');
@@ -2187,6 +2284,17 @@ async function v3RenderSettings(){
     for (let i = 0; i < sets.length; i++) { const a = await v3Call('setAppSetting', { key: sets[i][0], value: sets[i][1], passcode: passcode }, i === sets.length-1 ? 'Sender saved' : null); if (!a) return; }
     state.appSettings = Object.assign({}, state.appSettings, { mail_provider: pv, mail_from: from, brevo_sender_email: bm, mail_sender_name: name, brevo_sender_name: name }); cacheInvalidate(['featureFlags','v3home']);
   };
+  $('#st-testgo').onclick = async function(){
+    this.disabled = true;
+    const r = await api('sendTestEmail', { to: String($('#st-testto').value||'').trim() }).catch(function(){ return null; });
+    this.disabled = false;
+    if (r && r.success) toast('Test email sent to '+r.data.to+' via '+(r.data.via === 'brevo' ? 'Brevo' : 'Google')+(r.data.warning ? ' · '+r.data.warning : ''),'ok');
+    else toast((r && r.error) || 'Test email failed','error');
+    if (r && r.data && r.data.mail) paintMail(r.data.mail);
+  };
+  const paintMail = function(m){ const el = $('#st-mailstatus'); if (!el || !m) return;
+    el.innerHTML = 'Email status: sending with <strong class="text-slate-200">'+(m.effective === 'brevo' ? 'Brevo' : 'Google (MailApp)')+'</strong> · Brevo key '+(m.brevoKeySet ? '<span class="text-emerald-300">set</span>' : '<span class="text-amber-200">missing</span>')+' · sender '+esc(m.brevoSender||'')+(m.lastWarning ? '<br><span class="text-amber-200">Last warning: '+esc(m.lastWarning)+'</span>' : ''); };
+  api('getSuperDashboard', {}).then(function(r){ const hl = r && r.success && r.data && r.data.health; if (hl && hl.mail) paintMail(hl.mail); else if (hl) paintMail({ effective: hl.mailProvider, brevoKeySet: !!hl.brevoKeySet, brevoSender: hl.mailFrom||'' }); }).catch(function(){});
   try { await renderAdminFeaturesTab(); } catch (e) {}
 }
 async function v3RenderSuperHome(){
@@ -2197,11 +2305,11 @@ async function v3RenderSuperHome(){
     if (!sd) { $('#main-content').innerHTML = v3Page(head + v3Card(v3Loading()), 'home'); return; }
     const m = sd.meals || { today:{}, tomorrow:{} }, p = sd.pending || {};
     const stat = function(label, val, sub, tab){ return '<button type="button" '+(tab?'onclick="navigate(\''+tab+'\')"':'')+' class="rounded-xl bg-slate-900/50 border border-slate-700/60 p-2.5 text-left min-w-0"><p class="text-[10px] text-slate-400 truncate">'+label+'</p><p class="text-xl font-semibold text-slate-100">'+val+'</p>'+(sub?'<p class="text-[10px] text-slate-500 truncate">'+sub+'</p>':'')+'</button>'; };
-    const totalPending = (p.leaveHod||0)+(p.leaveMgmt||0)+(p.late||0)+(p.special||0)+(p.joins||0);
+    const totalPending = (p.leaveHod||0)+(p.leaveMgmt||0)+(p.late||0)+(p.special||0);
     const meals = '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="sa-meals">'+v3Title('fa-utensils','Meals')+
       '<div class="grid grid-cols-3 gap-2">'+V3_MEALS.map(function(k){ return stat(V3_MEAL_LABEL[k], m.tomorrow[k]||0, 'tomorrow · today '+(m.today[k]||0), 'kitchen'); }).join('')+'</div>'+v3WeeklyChart(sd.weekly)+'</section>';
     const pend = '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="sa-pending">'+v3Title('fa-inbox','Waiting for approval', v3Chip(String(totalPending), totalPending?'warn':'mute'))+
-      '<div class="grid grid-cols-3 gap-2">'+stat('Leave · HOD', p.leaveHod||0, '', 'approvals')+stat('Leave · final', p.leaveMgmt||0, '', 'approvals')+stat('Join requests', p.joins||0, '', 'approvals')+
+      '<div class="grid grid-cols-3 gap-2">'+stat('Leave · HOD', p.leaveHod||0, '', 'approvals')+stat('Leave · final', p.leaveMgmt||0, '', 'approvals')+stat('Off-menu dinners', p.offMenu||0, 'tomorrow', 'offmenu')+
       stat('Late meals', p.late||0, '', 'approvals')+stat('Special meals', p.special||0, '', 'approvals')+stat('Food comments', p.feedback||0, 'new', 'chefcomments')+'</div></section>';
     const boat = '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="sa-boat">'+v3Title('fa-ship','Boat load · today & tomorrow')+
       ((sd.boat||[]).length ? sd.boat.map(function(b){ const pct = b.capacity ? Math.min(100, Math.round(b.pax*100/b.capacity)) : 0;
@@ -2210,7 +2318,7 @@ async function v3RenderSuperHome(){
     const people = '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" id="sa-users">'+v3Title('fa-users','People & app health')+
       '<div class="grid grid-cols-3 gap-2">'+stat('Users', users.total||0, (users.active||0)+' active', 'usersv3')+stat('New this week', users.newThisWeek||0, '', 'usersv3')+stat('Version', esc(String(hl.version||APP_VERSION).replace('-demo','')), state.demo?'demo':'live', 'settings')+'</div>'+
       '<p class="text-[11px] text-slate-400">'+Object.keys(users.byRole||{}).map(function(r){ return esc(V3_ROLE_LABEL[r]||r)+' '+users.byRole[r]; }).join(' · ')+'</p>'+
-      '<p class="text-[11px] text-slate-400">Codes: sent by email · '+(hl.mailProvider === 'brevo' ? 'Brevo' : 'Google'+(hl.mailFrom?' ('+esc(hl.mailFrom)+')':''))+(hl.stationsExclusive?' · stations only':' · old kitchen/boat roles in parallel')+' · server time '+esc(v3Ts(hl.fijiNow))+'</p></section>';
+      '<p class="text-[11px] text-slate-400">Codes: sent by email · '+(hl.mailProvider === 'brevo' ? 'Brevo' : 'Google'+(hl.mailFrom?' ('+esc(hl.mailFrom)+')':''))+' · server time '+esc(v3Ts(hl.fijiNow))+'</p></section>';
     $('#main-content').innerHTML = v3Page(head + pend + meals + boat + people + '<p class="text-center text-[10px] text-slate-500" id="home-ver">UI '+APP_VERSION+(state.backendVersion?' · API '+esc(state.backendVersion):'')+(state.demo?' · demo':'')+'</p>', 'home');
     v3StartTicker();
   };
@@ -2220,118 +2328,7 @@ async function v3RenderSuperHome(){
 }
 
 
-/* ============ O. Station logins (shared Chef / Boat devices) ============ */
-const V3_ACTOR_KEY = 'pcrtest_station_actor';
-const V3_ACTOR_TTL_MS = 15 * 60 * 1000;
-function v3SavedActor(){
-  try {
-    const a = JSON.parse(localStorage.getItem(V3_ACTOR_KEY) || 'null');
-    if (a && a.station === v3Station() && a.name && Date.now() - Number(a.at || 0) < V3_ACTOR_TTL_MS) return a;
-  } catch (e) {}
-  return null;
-}
-function v3RememberActor(name){ try { localStorage.setItem(V3_ACTOR_KEY, JSON.stringify({ station: v3Station(), name: name, at: Date.now() })); } catch (e) {} v3StationHeader(); }
-function v3ForgetActor(){ try { localStorage.removeItem(V3_ACTOR_KEY); } catch (e) {} v3StationHeader(); }
-async function v3StationPeople(){
-  if (state._stPeople && state._stPeople.station === v3Station() && Date.now() - state._stPeople.at < 10*60000) return state._stPeople.list;
-  let list = [];
-  try { const r = await api('getStationPeople', {}); if (r && r.success) list = (r.data && r.data.people) || []; } catch (e) {}
-  state._stPeople = { station: v3Station(), at: Date.now(), list: list };
-  return list;
-}
-const V3_ACTION_TEXT = { markOrderStatus:'Mark an order', saveDinnerMenuItem:'Edit the menu', deleteDinnerMenuItem:'Delete a dish', approveLateDinnerOrder:'Approve a late dinner',
-  approveLateBreakfastOrder:'Decide a late breakfast', approveAllLateBreakfast:'Approve all late breakfasts', processBreakfastWorkflow:'Run the breakfast workflow', processDinnerWorkflow:'Generate the prep list',
-  decideMealRequest:'Accept / decline a request', decideAllMealRequests:'Accept / decline all requests', markChefFeedback:'Answer a food comment',
-  saveBoatRun:'Change a boat run', deleteBoatRun:'Remove a boat run', dedupeBoatRuns:'Remove duplicate runs', reviewEmergencyTravel:'Decide emergency travel', cancelBoatBooking:'Cancel a booking' };
-/** "Who's doing this?" — names of active staff in the station's department (+ Other). Resolves the name, or null when closed. */
-function v3PickActor(action){
-  return new Promise(async function(resolve){
-    const people = await v3StationPeople();
-    let ov = document.getElementById('actor-overlay');
-    if (!ov) { ov = document.createElement('div'); ov.id = 'actor-overlay'; ov.className = 'fixed inset-0 z-[80] bg-black/70 flex items-end sm:items-center justify-center p-3'; document.body.appendChild(ov); }
-    ov.classList.remove('hidden');
-    ov.innerHTML = '<div class="glass rounded-2xl p-4 w-full max-w-md space-y-3 max-h-[85vh] overflow-y-auto" role="dialog" aria-labelledby="actor-title">'+
-      '<div><h3 id="actor-title" class="font-semibold text-slate-100"><i class="fa-solid fa-user-pen text-teal-400 mr-2"></i>Who\u2019s doing this?</h3>'+
-      '<p class="text-[11px] text-slate-400">'+esc(V3_ACTION_TEXT[action] || 'Change')+' · '+esc(V3_STATION_LABEL[v3Station()])+' station · your name is saved with the change. Remembered on this device for 15 minutes.</p></div>'+
-      '<div class="grid grid-cols-2 gap-2" id="actor-list">'+(people.length ? people.map(function(p, i){ return '<button type="button" class="v3-actor rounded-xl border border-slate-600 bg-slate-900/50 px-2 py-2.5 text-left text-sm text-slate-100 min-w-0" data-i="'+i+'"><span class="block truncate">'+esc(p.name)+'</span><span class="block text-[10px] text-slate-400 truncate">'+esc(p.department)+'</span></button>'; }).join('') : '<p class="col-span-2 text-xs text-slate-400">No active staff found in this department — type your name below.</p>')+'</div>'+
-      '<div class="space-y-1"><label for="actor-other" class="text-[11px] text-slate-400">Other (type your name)</label><div class="flex gap-2"><input id="actor-other" class="ui-input flex-1 min-w-0" maxlength="60" placeholder="First and last name"/><button type="button" id="actor-other-go" class="btn-primary rounded-xl px-4 text-sm text-white font-semibold">Use</button></div></div>'+
-      '<button type="button" id="actor-cancel" class="w-full rounded-xl py-2.5 text-sm border border-slate-600 text-slate-300">Cancel</button></div>';
-    const finish = function(name){ ov.classList.add('hidden'); ov.innerHTML = ''; if (name) v3RememberActor(name); resolve(name || null); };
-    $$('#actor-overlay .v3-actor').forEach(function(b){ b.onclick = function(){ finish(people[Number(b.dataset.i)].name); }; });
-    $('#actor-other-go').onclick = function(){ const v = String($('#actor-other').value || '').trim(); if (v.length < 2) { toast('Type your name','error'); $('#actor-other').focus(); return; } finish(v + ' (other)'); };
-    $('#actor-other').onkeydown = function(e){ if (e.key === 'Enter') $('#actor-other-go').click(); };
-    $('#actor-cancel').onclick = function(){ finish(null); };
-  });
-}
-/* every station write asks "Who's doing this?" (or uses the name remembered for 15 minutes) and sends it as actorName */
-(function(){
-  const orig = api;
-  api = async function(action, payload){
-    const u = state.user;
-    const isMut = !!(u && v3Station() && (u.stationMutations || []).indexOf(action) >= 0);
-    if (!isMut) return orig.apply(this, arguments);
-    payload = Object.assign({}, payload || {});
-    if (!payload.actorName) {
-      const saved = v3SavedActor();
-      const name = saved ? saved.name : await v3PickActor(action);
-      if (!name) return { success:false, cancelled:true, error:'Cancelled — pick who is doing this first' };
-      payload.actorName = name;
-    }
-    let r = await orig.call(this, action, payload);
-    if (r && r.needsActor) { v3ForgetActor(); const name = await v3PickActor(action); if (name) r = await orig.call(this, action, Object.assign({}, payload, { actorName: name })); }
-    return r;
-  };
-})();
-/** Small "Chef station · acting as …" strip under the header on station devices. */
-function v3StationHeader(){
-  let el = document.getElementById('station-strip');
-  if (!v3Station()) { if (el) el.remove(); return; }
-  const host = document.getElementById('app-sticky') || document.getElementById('view-main');
-  if (!host) return;
-  if (!el) { el = document.createElement('div'); el.id = 'station-strip'; el.className = 'px-3 py-1.5 text-[11px] flex items-center justify-between gap-2 bg-teal-900/40 border-b border-teal-700/40'; host.appendChild(el); }
-  const a = v3SavedActor();
-  const left = a ? Math.max(1, Math.round((V3_ACTOR_TTL_MS - (Date.now() - a.at)) / 60000)) : 0;
-  el.innerHTML = '<span class="text-teal-100 truncate min-w-0"><i class="fa-solid '+(v3Station()==='chef'?'fa-fire-burner':'fa-ship')+' mr-1"></i>'+esc(V3_STATION_LABEL[v3Station()])+' station'+(a ? ' · acting as <strong>'+esc(a.name)+'</strong> <span class="text-teal-300/70">('+left+' min)</span>' : ' · you\u2019ll be asked who you are for each change')+'</span>'+
-    (a ? '<button type="button" id="station-strip-change" class="shrink-0 text-teal-300 underline">Not you?</button>' : '');
-  const b = document.getElementById('station-strip-change'); if (b) b.onclick = function(){ v3ForgetActor(); toast('Name cleared — you\u2019ll be asked on the next change','info'); };
-}
-/* a station device skips the personal bootstrap / profile / coach and lands on its page */
-const _v2EnterApp = enterApp;
-enterApp = function(){
-  if (!v3Station()) { v3StationHeader(); return _v2EnterApp(); }
-  bindDataCacheToUser(state.user.email);
-  $('#view-login').classList.add('hidden');
-  $('#view-main').classList.remove('hidden');
-  state.dataStatus = null; state.bootPending = null;
-  navigate(roleLandingTab());
-};
-const _v2LoadBootstrap = loadBootstrap;
-loadBootstrap = function(){ if (v3Station()) return Promise.resolve(null); return _v2LoadBootstrap.apply(this, arguments); };
-const _v2DoLogout = doLogout;
-doLogout = function(){ const wasStation = v3Station(); try { _v2DoLogout(); } finally { if (wasStation) { v3ForgetActor(); state._stPeople = null; } v3StationHeader(); } };
-
-/** Station "More": who is acting, extra tools, sign out this device. */
-function v3RenderStationMore(){
-  const st = v3Station(), a = v3SavedActor();
-  const group = function(title, rows){ return '<section class="space-y-1.5 min-w-0"><h3 class="v3-section-title px-1">'+title+'</h3><div class="glass rounded-2xl overflow-hidden">'+rows+'</div></section>'; };
-  let html = v3Card('<div class="flex items-center gap-3 min-w-0"><span class="w-11 h-11 rounded-full bg-teal-700/40 flex items-center justify-center shrink-0"><i class="fa-solid '+(st==='chef'?'fa-fire-burner':'fa-ship')+' text-teal-200"></i></span>'+
-    '<div class="min-w-0"><p class="font-semibold text-slate-100">'+esc(V3_STATION_LABEL[st])+' station</p><p class="text-[11px] text-slate-400">Shared login for this device · stays signed in until a superadmin changes the password</p></div></div>'+
-    '<div class="v3-row text-xs"><span class="text-slate-400">Acting as</span><span class="text-slate-100 truncate">'+(a ? esc(a.name) : '<span class="text-slate-500">asked on the next change</span>')+'</span></div>'+
-    '<div class="grid grid-cols-2 gap-2"><button type="button" id="stm-pick" class="rounded-xl py-2 text-xs border border-teal-500/40 text-teal-200">Pick my name</button><button type="button" id="stm-clear" class="rounded-xl py-2 text-xs border border-slate-600 text-slate-300">Clear name</button></div>', '');
-  if (st === 'chef') html += group('Chef', v3Row(v3Nav('chefcomments'),'fa-comment-dots','Food comments','Chef feedback from staff') +
-    v3Row(v3Nav('chefreports'),'fa-chart-column','Reports & roster','Daily / weekly / monthly, roster compare') +
-    v3Row(v3Nav('special'),'fa-star','Special meal orders','From HODs · accept / decline') +
-    v3Row(v3Nav('kitchen'),'fa-print','Kitchen lists & PDF','Prep list, checklists, print') +
-    v3Row(v3Nav('snapshots'),'fa-box-archive','Meal summaries','Breakfast, lunch, dinner · last 5 days · PDF / print'));
-  else html += group('Boat', v3Row(v3Nav('stboat'),'fa-users','Bookings & passenger lists','PDF, Dive PDF') + v3Row(v3Nav('boat'),'fa-calendar-days','Runs & Soso Express timetable','Add, edit, capacity'));
-  if (st === 'boat') html += '<div id="stm-emerg"></div>';
-  html += '<section class="glass rounded-2xl overflow-hidden">'+v3Row('doLogout()','fa-right-from-bracket','Sign out this device','A superadmin can also sign out every device')+'</section>'+
-    '<p class="text-center text-[10px] text-slate-500">PCR Staff App '+esc(APP_VERSION)+(state.demo?' · demo':'')+'</p>';
-  $('#main-content').innerHTML = v3Page(html, 'station-more');
-  $('#stm-pick').onclick = async function(){ const n = await v3PickActor(''); if (n) v3RenderStationMore(); };
-  $('#stm-clear').onclick = function(){ v3ForgetActor(); v3RenderStationMore(); };
-  if (st === 'boat') v3LoadEmergencyInbox('#stm-emerg');
-}
+/* ============ O. Boat Admin (boat manager / captain / admin) ============ */
 async function v3LoadEmergencyInbox(sel){
   let r = null; try { r = await api('getEmergencyTravel', { status:'pending' }); } catch (e) {}
   const box = $(sel); if (!box || !r || !r.success) return;
@@ -2344,26 +2341,26 @@ async function v3LoadEmergencyInbox(sel){
 }
 
 /** Boat page: today's + upcoming bookings, passenger lists, PDF / Dive PDF, boat tools. */
-async function v3RenderBoatStation(){
+async function v3RenderBoatAdmin(){
   const from = fijiDateString(), to = fijiDateString(addFijiDays(getFijiNow(), 7));
-  const asSuper = v3IsSuper() && !v3Station();
-  $('#main-content').innerHTML = v3Page(
-    (asSuper ? '<p class="text-[11px] text-sky-200 px-1" id="boat-as-super"><i class="fa-solid fa-user-shield mr-1"></i>Viewing the Boat page as superadmin — actions are recorded in your name.</p>' : '')+
+  const mgr = v3IsBoatManager();
+  $('#main-content').innerHTML = v3Page(v3Back('more','More') +
     '<section class="glass rounded-2xl p-3 space-y-2 min-w-0" id="stb-tools">'+v3Title('fa-toolbox','Boat tools')+
-    '<div class="grid grid-cols-2 gap-2"><button type="button" id="stb-add" class="btn-primary rounded-xl py-2 text-xs text-white font-semibold"><i class="fa-solid fa-plus mr-1"></i>Add run</button>'+
-    '<button type="button" id="stb-dedupe" class="rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-clone mr-1"></i>Remove duplicate runs</button>'+
+    '<div class="grid grid-cols-2 gap-2">'+(mgr ? '<button type="button" id="stb-add" class="btn-primary rounded-xl py-2 text-xs text-white font-semibold"><i class="fa-solid fa-plus mr-1"></i>Add run</button>'+
+    '<button type="button" id="stb-dedupe" class="rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-clone mr-1"></i>Remove duplicate runs</button>' : '')+
     '<button type="button" id="stb-copy" class="rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-copy mr-1"></i>Copy today\u2019s pax</button>'+
-    '<button type="button" onclick="navigate(\'boat\')" class="rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-clock mr-1"></i>Soso Express timetable</button></div></section>'+
+    '<button type="button" onclick="navigate(\'boatruns\')" class="rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-ship mr-1"></i>Runs & timetable (admin)</button>'+
+    '<button type="button" onclick="navigate(\'emergency\')" class="col-span-2 rounded-xl py-2 text-xs border border-amber-500/40 text-amber-200"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Emergency travel requests</button></div></section>'+
     '<div id="stb-list" class="space-y-3">'+v3Loading()+'</div><div id="stb-emerg"></div>', 'boat-station');
-  $('#stb-add').onclick = function(){ openEditBoatRunModal(null); };
-  $('#stb-dedupe').onclick = async function(){ if (!confirm('Hide duplicate runs (same date, time and route)? Bookings stay.')) return; const d = await v3Call('dedupeBoatRuns', {}); if (d) { toast(d.message || 'Done', 'ok'); cacheInvalidate(['boatRuns']); v3RenderBoatStation(); } };
+  const add = $('#stb-add'); if (add) add.onclick = function(){ openEditBoatRunModal(null); };
+  const dd = $('#stb-dedupe'); if (dd) dd.onclick = async function(){ if (!confirm('Hide duplicate runs (same date, time and route)? Bookings stay.')) return; const d = await v3Call('dedupeBoatRuns', {}); if (d) { toast(d.message || 'Done', 'ok'); cacheInvalidate(['boatRuns']); v3RenderBoatAdmin(); } };
   let runs = [], bookings = [];
   try {
     const [r1, r2] = await Promise.all([api('getBoatRuns', { fromDate: from, toDate: to }), api('getBoatBookings', {})]);
     runs = (r1 && r1.success && r1.data && r1.data.runs) || []; bookings = (r2 && r2.success && r2.data && r2.data.bookings) || [];
     if (r1 && !r1.success) toast(r1.error || 'Could not load runs','error');
   } catch (e) { toast('Couldn\u2019t reach the server — try again','error'); }
-  if (state.tab !== 'stboat') return;
+  if (state.tab !== 'boatadmin') return;
   runs = runs.filter(function(r){ return r.active !== false; }).sort(function(a, b){ return (String(a.date)+String(a.time)).localeCompare(String(b.date)+String(b.time)); });
   $('#stb-copy').onclick = function(){
     const lines = ['PCR boat pax — '+from+' Fiji'];
@@ -2383,15 +2380,37 @@ async function v3RenderBoatStation(){
         return '<details class="rounded-xl border border-slate-700/60 bg-slate-900/40 min-w-0" data-run="'+esc(r.id)+'"'+(d === from ? ' open' : '')+'><summary class="px-3 py-2 cursor-pointer space-y-1"><div class="v3-row text-sm"><span class="truncate min-w-0 text-slate-100">'+esc(r.time||'')+' · '+esc(r.route||'')+'</span><span class="text-xs text-slate-300 shrink-0">'+used+'/'+cap+'</span></div><div class="v3-bar"><span style="width:'+pct+'%'+(pct>=90?';background:#f59e0b':'')+'"></span></div>'+(r.notes?'<p class="text-[10px] text-slate-400">'+esc(r.notes)+'</p>':'')+'</summary>'+
           '<div class="px-3 pb-3 space-y-1.5"><p class="text-[10px] uppercase tracking-wide text-slate-500">Passengers ('+pax.length+' booking'+(pax.length===1?'':'s')+' · '+used+' seat'+(used===1?'':'s')+')</p>'+
           (pax.length ? pax.map(function(b){ return '<div class="v3-row text-xs py-1 border-t border-slate-700/40 min-w-0"><span class="truncate min-w-0 text-slate-100">'+esc(b.userName||b.userEmail)+' <span class="text-slate-400">· '+esc(b.seats||1)+' seat'+(Number(b.seats||1)===1?'':'s')+'</span></span><button type="button" class="v3-bk-cancel shrink-0 text-[11px] text-rose-300" data-id="'+esc(b.id)+'">Cancel</button></div>'; }).join('') : v3Empty('No bookings yet.'))+
-          '<div class="grid grid-cols-3 gap-2 pt-1"><button type="button" class="v3-pax-pdf rounded-lg py-1.5 text-[11px] btn-primary text-white" data-id="'+esc(r.id)+'"><i class="fa-solid fa-file-pdf mr-1"></i>Passengers</button><button type="button" class="v3-dive-pdf rounded-lg py-1.5 text-[11px] border border-sky-500/40 text-sky-200" data-id="'+esc(r.id)+'"><i class="fa-solid fa-person-swimming mr-1"></i>Dive PDF</button><button type="button" class="v3-run-edit rounded-lg py-1.5 text-[11px] border border-slate-600 text-slate-200" data-id="'+esc(r.id)+'">Edit run</button></div></div></details>';
+          '<div class="grid grid-cols-3 gap-2 pt-1"><button type="button" class="v3-pax-pdf rounded-lg py-1.5 text-[11px] btn-primary text-white" data-id="'+esc(r.id)+'"><i class="fa-solid fa-file-pdf mr-1"></i>Passengers</button><button type="button" class="v3-dive-pdf rounded-lg py-1.5 text-[11px] border border-sky-500/40 text-sky-200" data-id="'+esc(r.id)+'"><i class="fa-solid fa-person-swimming mr-1"></i>Dive PDF</button>'+(mgr ? '<button type="button" class="v3-run-edit rounded-lg py-1.5 text-[11px] border border-slate-600 text-slate-200" data-id="'+esc(r.id)+'">Edit run</button>' : '')+'</div></div></details>';
       }).join('')+'</section>';
   }).join('') : v3Card(v3Empty('No boat runs in the next 7 days.'));
   $$('.v3-pax-pdf').forEach(function(b){ b.onclick = function(){ v3BoatPdf(b.dataset.id, 'Passenger list'); }; });
   $$('.v3-dive-pdf').forEach(function(b){ b.onclick = function(){ v3BoatPdf(b.dataset.id, 'Boat Trip Summary — Dive'); }; });
   $$('.v3-run-edit').forEach(function(b){ b.onclick = function(){ openEditBoatRunModal(runs.find(function(r){ return String(r.id) === b.dataset.id; })); }; });
-  $$('.v3-bk-cancel').forEach(function(b){ b.onclick = async function(){ if (!confirm('Cancel this booking?')) return; const d = await v3Call('cancelBoatBooking', { id: b.dataset.id }, 'Booking cancelled'); if (d) { cacheInvalidate(['boatRuns']); v3RenderBoatStation(); } }; });
+  $$('.v3-bk-cancel').forEach(function(b){ b.onclick = async function(){ if (!confirm('Cancel this booking?')) return; const d = await v3Call('cancelBoatBooking', { id: b.dataset.id }, 'Booking cancelled'); if (d) { cacheInvalidate(['boatRuns']); v3RenderBoatAdmin(); } }; });
   v3LoadEmergencyInbox('#stb-emerg');
 }
+const v3RenderBoatStation = v3RenderBoatAdmin;
+/** Boat Admin → runs editor: the 2.x Boat screen with the manager / captain tools (only in role mode). */
+async function v3RenderBoatRuns(){
+  state.tab = 'boat'; // the 2.x screen paints only while the tab is 'boat'; role mode stays 'boat'
+  state._roleMode = 'boat';
+  const ht = $('#header-title'); if (ht) ht.textContent = 'Boat runs (admin)';
+  await renderBoat();
+}
+async function v3RenderEmergency(){
+  $('#main-content').innerHTML = v3Page(v3RoleBack('boat') + '<div id="em-box">'+v3Card(v3Loading())+'</div>', 'emergency-root');
+  await v3LoadEmergencyInbox('#em-box');
+}
+const _v2RenderBoat = renderBoat;
+renderBoat = async function(){
+  const out = await _v2RenderBoat.apply(this, arguments);
+  if (state.tab === 'boat' && state._roleMode === 'boat' && $('#boat-root') && !$('#boat-role-back')) {
+    const bar = document.createElement('div'); bar.id = 'boat-role-back'; bar.className = 'space-y-2';
+    bar.innerHTML = v3RoleBack('boat') + '<p class="text-[11px] text-teal-200 px-1"><i class="fa-solid fa-anchor mr-1"></i>Boat Admin mode — run and passenger tools are shown. Tap Boat in the bar below for your normal staff view.</p>';
+    $('#boat-root').prepend(bar);
+  }
+  return out;
+};
 async function v3BoatPdf(runId, title){
   try {
     toast('Preparing PDF…','ok');
@@ -2405,183 +2424,5 @@ async function v3BoatPdf(runId, title){
     downloadBlob(name, blob); toast('PDF downloaded','ok');
   } catch (e) { toast((e && e.message) || 'PDF failed','error'); }
 }
-/* the Runs tab on a Boat station device: no personal booking / emergency request buttons */
-const _v2RenderBoat = renderBoat;
-renderBoat = async function(){
-  const out = await _v2RenderBoat.apply(this, arguments);
-  if (v3Station() === 'boat' && state.tab === 'boat') {
-    $$('#boat-root .book-run').forEach(function(b){ b.remove(); });
-    const em = $('#btn-emerg-travel'); if (em) em.remove();
-    $$('#boat-root button').forEach(function(b){ if (/my bookings/i.test(b.textContent||'')) b.remove(); });
-  }
-  if ((v3Station() === 'boat' || (v3IsSuper() && !v3Station())) && state.tab === 'boat' && !$('#boat-dedupe') && $('#boat-root')) {
-    const bar = document.createElement('div'); bar.className = 'flex gap-2';
-    bar.innerHTML = '<button type="button" id="boat-dedupe" class="flex-1 rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-clone mr-1"></i>Remove duplicate runs</button><button type="button" onclick="navigate(\'stboat\')" class="flex-1 rounded-xl py-2 text-xs border border-teal-500/40 text-teal-200"><i class="fa-solid fa-users mr-1"></i>Passenger lists</button>';
-    $('#boat-root').prepend(bar);
-    $('#boat-dedupe').onclick = async function(){ if (!confirm('Hide duplicate runs (same date, time and route)? Bookings stay.')) return; const d = await v3Call('dedupeBoatRuns', {}); if (d) { toast(d.message || 'Done','ok'); cacheInvalidate(['boatRuns']); renderBoat(); } };
-  }
-  return out;
-};
-
-/** Superadmin: Chef / Boat station usernames + passwords (hashed on the server), rotate, sign out every device. */
-async function v3RenderStationLogins(){
-  $('#main-content').innerHTML = v3Page(v3Back('manage','Manage') + v3Card(v3Title('fa-key','Station logins')+
-    '<p class="text-xs text-slate-300">Two shared logins for the kitchen and boat devices. Signing in with them opens <strong>only</strong> the Chef page or the Boat page — no meals, leave or personal data. Each change asks “Who’s doing this?” and is logged with that name.</p>'+
-    '<p class="text-[11px] text-slate-400">Passwords are stored hashed on the server. Setting or rotating a password signs out <strong>every</strong> device using that station.</p>')+'<div id="stl-list" class="space-y-3">'+v3Loading()+'</div>', 'stations-root');
-  const d = await v3Call('getStations', {});
-  if (state.tab !== 'stations' || !d) return;
-  const st = d.stations || {};
-  $('#stl-list').innerHTML = ['chef','boat'].map(function(k){
-    const x = st[k] || {};
-    return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0" data-station="'+k+'">'+v3Title(k==='chef'?'fa-fire-burner':'fa-ship', esc(V3_STATION_LABEL[k])+' station', x.configured ? v3Chip('Set up','ok') : v3Chip('Not set up','warn'))+
-      '<div class="v3-row text-xs"><span class="text-slate-400">Username</span><span class="text-slate-100 font-mono">'+esc(x.username||k)+'</span></div>'+
-      '<div class="v3-row text-xs"><span class="text-slate-400">Password changed</span><span class="text-slate-200">'+(x.rotatedAt ? esc(v3Ts(x.rotatedAt))+(x.rotatedBy?' · '+esc(x.rotatedBy):'') : '—')+'</span></div>'+
-      (x.signedOutAt ? '<div class="v3-row text-xs"><span class="text-slate-400">All devices signed out</span><span class="text-slate-200">'+esc(v3Ts(x.signedOutAt))+'</span></div>' : '')+
-      '<div class="grid grid-cols-2 gap-2 pt-1"><button type="button" class="v3-st-gen btn-primary rounded-xl py-2.5 text-xs text-white font-semibold" data-k="'+k+'"><i class="fa-solid fa-rotate mr-1"></i>'+(x.configured?'Rotate password':'Create password')+'</button>'+
-      '<button type="button" class="v3-st-set rounded-xl py-2.5 text-xs border border-teal-500/40 text-teal-200" data-k="'+k+'"><i class="fa-solid fa-pen mr-1"></i>Set my own</button>'+
-      '<button type="button" class="v3-st-out col-span-2 rounded-xl py-2 text-xs border border-rose-500/40 text-rose-200" data-k="'+k+'"'+(x.configured?'':' disabled')+'><i class="fa-solid fa-right-from-bracket mr-1"></i>Sign out all '+esc(V3_STATION_LABEL[k])+' devices</button></div></section>';
-  }).join('') + '<div id="stl-once"></div>' + v3SwitchOverCard(d);
-  v3BindSwitchOver(d);
-  const once = function(k, pw, username){
-    $('#stl-once').innerHTML = v3Card(v3Title('fa-eye', 'New '+esc(V3_STATION_LABEL[k])+' password — shown once')+
-      '<div class="rounded-xl bg-slate-900/70 border border-teal-500/40 p-3 text-center"><p class="text-[11px] text-slate-400">Username</p><p class="font-mono text-slate-100">'+esc(username)+'</p><p class="text-[11px] text-slate-400 mt-1">Password</p><p class="font-mono text-lg text-teal-200 select-all" id="stl-pw">'+esc(pw)+'</p></div>'+
-      '<button type="button" id="stl-copy" class="w-full rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-copy mr-1"></i>Copy</button><p class="text-[10px] text-slate-500">Write it down for the '+esc(V3_STATION_LABEL[k].toLowerCase())+' crew. It can\u2019t be shown again — rotate to get a new one.</p>', 'stl-once-card');
-    $('#stl-copy').onclick = function(){ copyPlainText(username+' / '+pw, 'Copied'); };
-  };
-  $$('.v3-st-gen').forEach(function(b){ b.onclick = async function(){
-    const k = b.dataset.k;
-    if (st[k] && st[k].configured && !confirm('Rotate the '+V3_STATION_LABEL[k]+' password? Every '+V3_STATION_LABEL[k]+' device is signed out.')) return;
-    const pass = await askPasscode('super'); if (!pass) return;
-    const r = await v3Call('setStationPassword', { station: k, generate: 1, passcode: pass });
-    if (r) { toast(r.message || 'Done','ok'); await v3RenderStationLogins(); once(k, r.password, (r.station && r.station.username) || k); }
-  }; });
-  $$('.v3-st-set').forEach(function(b){ b.onclick = function(){
-    const k = b.dataset.k;
-    v3Form('Set the '+V3_STATION_LABEL[k]+' station login', [
-      { id:'username', label:'Username (letters, numbers, dot, dash)', value: (st[k] && st[k].username) || k, required:true, max:30 },
-      { id:'password', label:'New password (8+ characters)', type:'password', required:true, max:64 },
-      { id:'password2', label:'Repeat the password', type:'password', required:true, max:64 }
-    ], 'Save & sign out devices', async function(v){
-      if (v.password.length < 8) { toast('At least 8 characters','error'); return false; }
-      if (v.password !== v.password2) { toast('Passwords do not match','error'); return false; }
-      const pass = await askPasscode('super'); if (!pass) return false;
-      const r = await v3Call('setStationPassword', { station: k, username: v.username, password: v.password, passcode: pass });
-      if (r) { toast(r.message || 'Saved','ok'); v3RenderStationLogins(); }
-      return !!r;
-    }, 'Every device signed in as '+esc(V3_STATION_LABEL[k])+' is signed out when you save.');
-  }; });
-  $$('.v3-st-out').forEach(function(b){ b.onclick = async function(){
-    const k = b.dataset.k;
-    if (!confirm('Sign out every '+V3_STATION_LABEL[k]+' device now? The password stays the same.')) return;
-    const pass = await askPasscode('super'); if (!pass) return;
-    const r = await v3Call('signOutStation', { station: k, passcode: pass });
-    if (r) { toast(r.message || 'Signed out','ok'); v3RenderStationLogins(); }
-  }; });
-}
-/** Switch-over (prepared, NOT run): make Chef / Boat station-only. Preview first; apply needs both stations set up. */
-function v3SwitchOverCard(d){
-  const ex = !!d.exclusive;
-  return '<section class="glass rounded-2xl p-4 space-y-2 min-w-0 border border-amber-500/30" id="switch-over">'+v3Title('fa-right-left','Switch-over to station-only', ex ? v3Chip('Done · stations only','ok') : v3Chip('Not run · old setup in parallel','warn'))+
-    (ex ? '<p class="text-xs text-slate-300">Chef and boat tools now open only with the station logins (and for superadmins). Personal kitchen / boat roles were removed; the old values are kept in the “Role Backup” sheet.</p>'+
-      '<button type="button" id="so-back" class="w-full rounded-xl py-2.5 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-rotate-left mr-1"></i>Undo switch-over (restore personal roles from the backup)</button>'
-    : '<p class="text-xs text-slate-300">Right now personal <strong>kitchen</strong> and <strong>boat</strong> accounts keep their tools alongside the station logins. After testing is approved, the switch-over removes kitchen / boat as personal roles (HOD, assistant HOD and admin rights are kept; everyone else becomes staff), backs up every changed row, and hides chef / boat tools from personal accounts.</p>'+
-      '<div class="grid grid-cols-2 gap-2"><button type="button" id="so-preview" class="rounded-xl py-2.5 text-xs border border-teal-500/40 text-teal-200"><i class="fa-solid fa-eye mr-1"></i>Preview</button><button type="button" id="so-apply" class="rounded-xl py-2.5 text-xs border border-rose-500/40 text-rose-200"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Apply…</button></div>')+
-    '<div id="so-out"></div></section>';
-}
-function v3BindSwitchOver(d){
-  const show = function(r){
-    const ch = r.changes || [];
-    $('#so-out').innerHTML = '<div class="space-y-1 pt-1" id="so-preview-out"><p class="text-[11px] text-slate-300">'+(r.applied ? 'Applied' : 'Preview — nothing changed')+' · '+ch.length+' account(s) change'+((r.stationsMissing||[]).length ? ' · <span class="text-amber-200">set up first: '+esc(r.stationsMissing.join(', '))+' station</span>' : '')+'</p>'+
-      (ch.length ? ch.map(function(x){ return '<div class="text-[11px] py-1 border-b border-slate-700/40 last:border-0 min-w-0"><span class="text-slate-100">'+esc(x.name||x.email)+'</span> <span class="text-slate-400">· '+esc(x.department||'—')+'</span><br><span class="text-slate-300">'+esc(x.from)+' → '+esc(x.to)+'</span> <span class="text-rose-300">(drops '+esc((x.dropped||[]).join(', '))+')</span></div>'; }).join('') : v3Empty('No personal kitchen / boat roles to remove.'))+'</div>';
-  };
-  const pv = $('#so-preview'); if (pv) pv.onclick = async function(){ const r = await v3Call('stationsSwitchOver', { dryRun: 'true' }); if (r) show(r); };
-  const ap = $('#so-apply'); if (ap) ap.onclick = async function(){
-    const r0 = await v3Call('stationsSwitchOver', { dryRun: 'true' }); if (!r0) return; show(r0);
-    if ((r0.stationsMissing||[]).length) { toast('Set up the '+r0.stationsMissing.join(' and ')+' station password first','error'); return; }
-    if (!confirm('Switch over now? '+(r0.changes||[]).length+' personal kitchen / boat account(s) lose those roles and chef / boat tools become station-only.')) return;
-    const r = await v3Call('stationsSwitchOver', { apply: 1 }, 'Switch-over done'); if (r) { cacheInvalidate(['v3home']); await v3RefreshHome(); v3RenderStationLogins(); }
-  };
-  const bk = $('#so-back'); if (bk) bk.onclick = async function(){
-    if (!confirm('Undo the switch-over and restore the personal kitchen / boat roles from the backup?')) return;
-    const r = await v3Call('stationsSwitchBack', {}, 'Personal roles restored'); if (r) { cacheInvalidate(['v3home']); await v3RefreshHome(); v3RenderStationLogins(); }
-  };
-}
-/* login: the same box takes an email or a station username */
-(function(){
-  const le = document.getElementById('login-email');
-  if (le) { le.type = 'text'; le.setAttribute('inputmode', 'email'); le.setAttribute('autocapitalize', 'none'); le.setAttribute('spellcheck', 'false'); le.placeholder = 'Email or station username'; }
-  const lab = document.querySelector('label[for="login-email"]'); if (lab && /email/i.test(lab.textContent || '')) lab.textContent = 'Email or station username';
-})();
-
-/* ============ P. Meal summaries (breakfast / lunch / dinner, last 5 days, Meal Snapshots tab) ============ */
-function v3SnapHtml(d){
-  const pl = d.payload || {}, meal = d.meal || pl.meal || 'dinner';
-  const dn = meal === 'dinner' ? { serviceDate: pl.serviceDate || d.serviceDate, prep: pl.prep || {}, orders: pl.orders || [], total: pl.total, late: (pl.orders || []).filter(function(o){ return String(o.status) === 'late_pending'; }) } : null;
-  const base = meal === 'dinner' ? buildDinnerOrderSheetHtml(dn) : buildHeadcountOrderSheetHtml(meal === 'lunch' ? 'Lunch' : 'Breakfast', Object.assign({ serviceDate: d.serviceDate }, pl));
-  const cut = meal === 'dinner' ? '8pm' : '1pm';
-  const src = d.source === 'rows' ? 'Built from the order rows on '+esc(v3Ts(d.generatedAt)) : 'Saved summary · '+esc(d.kind === 'auto' ? 'automatic at the '+cut+' cutoff' : 'saved')+' · '+esc(v3Ts(d.generatedAt))+' · '+esc(d.generatedBy||'');
-  const add = d.addendum || { added:[], changed:[] };
-  let extra = '';
-  if ((add.added||[]).length || (add.changed||[]).length) {
-    const row = function(o, what){ return '<tr style="page-break-inside:avoid"><td>'+esc(orderDisplayName(o))+'</td><td>'+esc(o.department||'')+'</td><td>'+esc(o.mealChoice||'')+'</td><td>'+esc(what)+'</td><td>'+notePrintHtml(o)+'</td></tr>'; };
-    extra = '<div style="margin:18px 0 0;padding:10px;border:2px dashed #c2410c;border-radius:6px;page-break-inside:avoid"><h2 style="margin:0 0 6px;font-size:14px;color:#c2410c">Addendum — changes after this summary was saved</h2>'+
-      '<table style="width:100%;border-collapse:collapse;font-size:12px" border="1" cellpadding="5"><thead><tr style="background:#fff7ed"><th>Name</th><th>Department</th><th>Item</th><th>Change</th><th>Special note / allergy</th></tr></thead><tbody>'+
-      (add.added||[]).map(function(o){ return row(o, 'added · '+(V3_STATUS_TEXT[o.status]||o.status)+' · '+String(o.createdAt||'').slice(0,16)); }).join('')+
-      (add.changed||[]).map(function(o){ return row(o, (V3_STATUS_TEXT[o.was]||o.was)+' → '+(V3_STATUS_TEXT[o.status]||o.status)); }).join('')+'</tbody></table></div>';
-  }
-  return '<div style="background:#fff;color:#111"><p style="margin:0 0 6px;font:11px system-ui,Arial,sans-serif;color:#555">'+src+'</p>'+base+extra+'</div>';
-}
-async function v3RenderSnapshots(){
-  const st = state.snap || { meal:'dinner', date:'' }; state.snap = st;
-  const backTab = v3Station() ? 'chef' : (v3IsAdmin() ? 'manage' : 'chef');
-  $('#main-content').innerHTML = v3Page(v3Back(backTab, backTab === 'manage' ? 'Manage' : 'Chef') +
-    v3Card(v3Title('fa-box-archive','Meal summaries')+
-      '<p class="text-[11px] text-slate-400">Order summaries in the printable kitchen format (with allergies & special requests). Saved automatically when the books close — dinner at 8:00 PM, breakfast & lunch at 1:00 PM Fiji. If a day was not saved it is built from the order rows.</p>'+
-      '<div class="grid grid-cols-3 gap-1 rounded-xl bg-slate-900/60 p-1" id="snap-meals">'+V3_MEALS.map(function(m){ return '<button type="button" class="v3-snap-meal rounded-lg py-1.5 text-xs '+(st.meal===m?'bg-teal-600 text-white font-semibold':'text-slate-300')+'" data-m="'+m+'">'+V3_MEAL_LABEL[m]+'</button>'; }).join('')+'</div>'+
-      '<div id="snap-days" class="grid grid-cols-4 gap-1.5">'+v3Loading()+'</div>'+
-      '<details class="text-[11px] text-slate-400"><summary class="cursor-pointer">Other date</summary><div class="flex gap-2 pt-2"><input type="date" id="snap-date" class="ui-input flex-1 min-w-0" value="'+esc(st.date||'')+'"/><button type="button" id="snap-go" class="btn-primary rounded-xl px-4 text-sm text-white font-semibold">Open</button></div></details>', 'snap-pick')+
-    '<div id="snap-preview"></div><div id="snap-list" class="space-y-2"></div>', 'snapshots-root');
-  $$('.v3-snap-meal').forEach(function(b){ b.onclick = function(){ st.meal = b.dataset.m; st.date = ''; v3RenderSnapshots(); }; });
-  $('#snap-go').onclick = function(){ const d = $('#snap-date').value; if (!d) { toast('Pick a date','error'); return; } st.date = d; v3OpenSnapshot({ serviceDate: d, meal: st.meal }); };
-  const d = await v3Call('getOrderSnapshots', { meal: st.meal, limit: 30 });
-  if (state.tab !== 'snapshots' || !d) return;
-  if (d.autoCreated) toast('The last closed summary was saved', 'ok');
-  const days = d.days || [];
-  if (!st.date) st.date = (d.lastClosed && d.lastClosed[st.meal]) || d.lastClosedDinner || fijiDateString();
-  $('#snap-days').innerHTML = days.map(function(x){
-    const lab = x.offset === 0 ? 'Today' : x.offset === 1 ? 'Tomorrow' : x.offset === -1 ? 'Yesterday' : v3DateLabel(x.date);
-    const saved = x.saved && x.saved[st.meal];
-    return '<button type="button" class="v3-snap-day rounded-xl border px-1 py-1.5 text-center min-w-0 '+(x.date===st.date?'border-teal-400 bg-teal-600/30 text-white':'border-slate-700/60 text-slate-200')+'" data-d="'+esc(x.date)+'">'+
-      '<span class="block text-[11px] font-semibold truncate">'+esc(lab)+'</span><span class="block text-[9px] '+(saved?'text-emerald-300':'text-slate-500')+'">'+(saved?'saved':'from rows')+'</span></button>';
-  }).join('');
-  $$('.v3-snap-day').forEach(function(b){ b.onclick = function(){ st.date = b.dataset.d; $$('.v3-snap-day').forEach(function(x){ const on = x === b; x.classList.toggle('border-teal-400', on); x.classList.toggle('bg-teal-600/30', on); }); v3OpenSnapshot({ serviceDate: st.date, meal: st.meal }); }; });
-  const list = d.snapshots || [];
-  $('#snap-list').innerHTML = '<p class="v3-section-title px-1">Saved '+esc(V3_MEAL_LABEL[st.meal].toLowerCase())+' summaries ('+d.total+')</p>' + (list.length ? list.slice(0, 15).map(function(x){
-    return '<button type="button" class="v3-snap w-full text-left glass rounded-xl p-3 min-w-0" data-id="'+esc(x.id)+'"><div class="v3-row"><p class="text-sm text-slate-100 truncate min-w-0">'+esc(V3_MEAL_LABEL[x.meal]||x.meal)+' · '+esc(v3DateLabel(x.serviceDate))+' <span class="text-[11px] text-slate-400">'+esc(x.serviceDate)+'</span></p>'+
-      v3Chip(x.kind === 'auto' ? 'Auto '+(x.meal === 'dinner' ? '8pm' : '1pm') : 'Saved', x.kind === 'auto' ? 'ok' : 'info')+'</div><p class="text-[11px] text-slate-400 truncate">'+x.totalOrders+' orders · '+esc(v3Ts(x.generatedAt))+' · '+esc(x.generatedBy)+'</p></button>';
-  }).join('') : v3Card(v3Empty('Nothing saved yet — the first one is saved when the books close.')));
-  $$('.v3-snap').forEach(function(b){ b.onclick = function(){ v3OpenSnapshot({ id: b.dataset.id }); }; });
-  v3OpenSnapshot({ serviceDate: st.date, meal: st.meal });
-}
-async function v3OpenSnapshot(q){
-  const box = $('#snap-preview'); if (!box) return;
-  box.innerHTML = v3Card(v3Loading());
-  const d = await v3Call('getOrderSnapshot', q);
-  if (!d || state.tab !== 'snapshots') { box.innerHTML = ''; return; }
-  state._snapOpen = d;
-  const html = v3SnapHtml(d);
-  const fn = (d.meal||'dinner')+'-orders-'+d.serviceDate+(d.source === 'rows' ? '-rebuilt' : '-saved')+'.pdf';
-  const addN = ((d.addendum||{}).added||[]).length + ((d.addendum||{}).changed||[]).length;
-  box.innerHTML = v3Card(v3Title('fa-eye', esc(V3_MEAL_LABEL[d.meal]||'Dinner')+' · '+esc(d.serviceDate), d.source === 'rows' ? v3Chip('From order rows','warn') : v3Chip(d.kind === 'auto' ? 'Saved at '+(d.meal === 'dinner' ? '8pm' : '1pm') : 'Saved','ok'))+
-    '<p class="text-[11px] text-slate-400">'+d.totalOrders+' orders'+(addN ? ' · <span class="text-amber-200">'+addN+' change(s) after it was saved (addendum)</span>' : '')+'</p>'+
-    '<div class="grid grid-cols-2 gap-2"><button type="button" id="snap-pdf" class="btn-primary rounded-xl py-2 text-xs text-white font-semibold"><i class="fa-solid fa-file-pdf mr-1"></i>Download PDF</button><button type="button" id="snap-print" class="rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-print mr-1"></i>Print</button>'+
-    '<button type="button" id="snap-view" class="rounded-xl py-2 text-xs border border-slate-600 text-slate-200"><i class="fa-solid fa-up-right-from-square mr-1"></i>View PDF</button><button type="button" id="snap-save" class="rounded-xl py-2 text-xs border border-teal-500/40 text-teal-200"><i class="fa-solid fa-floppy-disk mr-1"></i>Save a copy now</button></div>'+
-    '<div class="rounded-xl bg-white p-2 overflow-auto" style="max-height:60vh" id="snap-sheet">'+html+'</div>', 'snap-open');
-  $('#snap-pdf').onclick = function(){ downloadChefPdf(html, fn); };
-  $('#snap-view').onclick = function(){ viewChefPdf(html, fn); };
-  $('#snap-print').onclick = function(){ const w = window.open('', '_blank'); if (!w) { toast('Allow pop-ups to print','error'); return; } w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(fn)+'</title></head><body>'+html+'<script>window.onload=function(){window.print()}<\/script></body></html>'); w.document.close(); };
-  $('#snap-save').onclick = async function(){ const r = await v3Call('saveOrderSnapshot', { serviceDate: d.serviceDate, meal: d.meal }, 'Summary saved'); if (r) v3RenderSnapshots().then(function(){ v3OpenSnapshot({ id: r.id }); }); };
-}
-
 /* ============ N. start ============ */
 boot();

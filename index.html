@@ -248,7 +248,7 @@ const LS_COACH_DONE = 'pcrtest_v2_coach_done';
 
       <form id="login-form" class="space-y-3">
         <div>
-          <label for="login-email" class="text-xs text-slate-400 mb-1 block">Email or station username</label>
+          <label for="login-email" class="text-xs text-slate-400 mb-1 block">Email</label>
           <input type="text" inputmode="email" autocapitalize="none" spellcheck="false" id="login-email" required class="ui-input" placeholder="you@paradisecoveresortfiji.com or chef / boat" autocomplete="username"/>
         </div>
         <div>
@@ -593,7 +593,7 @@ function seedDemoSamples(db){
 }
 const WEEKDAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const DEFAULT_DINNER_MENUS = {
-    0:['Lamb Neck Curry','Chicken Burger/Chips','Chicken cheese Pizza','Roasted Chicken / Potato Salad / Vegs'],
+    0:['Lamb Neck Curry','Chicken Burger/Chips','Chicken cheese Pizza','Oven Roasted Chicken/ Patatoe Salad/Veggies'],
     1:['Chicken Pizza','Beef Curry / Rice / Chutney','Chicken Burger','Sausages / Potato Salad / Gravy'],
     2:['Oven Roasted Lamb neck / Vegs/ Cassava','Chicken In Black Bean Sauce / Rice','Chicken Pizza'],
     3:['Chicken In Tomato sauce / Rice / Sliced cucumber','Chicken Pizza','Chicken Burger','Beef Soup / Veg / Kumala'],
@@ -858,7 +858,7 @@ function buildDoThisNowActions(){
   const lu = (cachePeek(luKey)||[]).filter(function(o){ return o.status!=='cancelled'; })[0];
   const din = pickActiveOrder(cachePeek(diKey)||[]);
   if (di.open && !(din && din.status && din.status!=='cancelled' && din.status!=='rejected')) {
-    actions.push({ id:'dtn-dinner', icon:'fa-moon', label:'Book dinner', sub:'Open until 8pm', tab:'dinner', primary:true });
+    actions.push({ id:'dtn-dinner', icon:'fa-moon', label:'Book dinner', sub:'Open until '+dinnerCutLabel(), tab:'dinner', primary:true });
   }
   if (bi.open && !(bf && ['ordered','late_approved','approved'].includes(bf.status))) {
     actions.push({ id:'dtn-bf', icon:'fa-mug-saucer', label:'Count in breakfast', sub:'Open until 1pm', tab:'breakfast', primary:true });
@@ -974,9 +974,9 @@ function buildMyOrdersSummary(src, email, now){
     email, fijiNow: formatFiji(now), dates, days,
     cutoffs: {
       serviceDate: dates.tomorrow,
-      breakfast: { open:bi.open, lateOpen:bi.lateOpen, fullyClosed:bi.fullyClosed, label: bi.open?'Open until 1:00pm today':(bi.lateOpen?'Late request until 6:00pm (needs chef OK)':'Closed after 6:00pm') },
+      breakfast: { open:bi.open, lateOpen:bi.lateOpen, fullyClosed:bi.fullyClosed, label: bi.open?'Open until 1:00pm today':(bi.lateOpen?'Late request until '+mtLabel(mealTimesNow().late_close_breakfast)+' (needs chef OK)':'Closed after 6:00pm') },
       lunch: { open:li.open, label: li.open?'Open until 1:00pm today':'Closed at 1:00pm' },
-      dinner: { open:di.open, label: di.open?'Open until 8:00pm today':'Closed at 8:00pm — late requests need chef OK' }
+      dinner: { open:di.open, label: di.open?'Open until '+dinnerCutLabel()+' today':'Closed at '+dinnerCutLabel()+' — late request until '+mtLabel(mealTimesNow().late_close_dinner)+'' }
     }
   };
 }
@@ -1001,7 +1001,7 @@ function myOrderChip(m){
   return '<span class="ui-badge '+cls+'">'+label+'</span>';
 }
 function myOrdersDefaultDay(){
-  // Tomorrow while any window for tomorrow is still open (dinner closes 8pm Fiji); otherwise Today.
+  // Tomorrow while any window for tomorrow is still open (dinner closes at the dinner cutoff, default 11:55pm Fiji); otherwise Today.
   return dinnerCutoffInfo().open ? 'tomorrow' : 'today';
 }
 async function fetchMyOrdersSummary(){
@@ -1163,29 +1163,32 @@ function maybeShowFirstLoginCoach(){
   setTimeout(paint, 600);
 }
 
-/** Dinner: closes 8pm Fiji today for tomorrow service */
-function dinnerCutoffInfo(now=getFijiNow()) {
-  return { open: now.getUTCHours() < 20, serviceDate: fijiDateString(addFijiDays(now,1)),
-    cutoffLabel: '8:00 PM Fiji (today for tomorrow dinner)', meal:'dinner', fijiNow: formatFiji(now) };
+/* 3.0.0: meal times come from App Settings (Kitchen Admin → Meal times) via bootstrap / getV3Home (state.mealTimes).
+ * Defaults: dinner cutoff 11:55pm the day before, late dinner requests until 8:00am on the dinner day;
+ * breakfast / lunch cutoff 1:00pm the day before, late requests until midnight. */
+const MT_DEFAULTS = { dinner_cutoff:'23:55', breakfast_cutoff:'13:00', lunch_cutoff:'13:00', late_close_dinner:'08:00', late_close_breakfast:'00:00', late_close_lunch:'00:00' };
+function mealTimesNow(){ const s = (typeof state !== 'undefined' && state && state.mealTimes && state.mealTimes.times) || {}; return Object.assign({}, MT_DEFAULTS, s); }
+function mtMin(hhmm){ const p = String(hhmm||'0:0').split(':'); return (+p[0])*60 + (+p[1]||0); }
+function mtLabel(hhmm){ const m = mtMin(hhmm), h = Math.floor(m/60), mi = m%60; if (m === 0) return '12:00am (midnight)'; if (m === 720) return '12:00pm (noon)'; return ((h%12)||12)+':'+String(mi).padStart(2,'0')+(h<12?'am':'pm'); }
+function mealWindowC(meal, serviceDate){
+  const t = mealTimesNow(), cut = t[meal+'_cutoff'], lc = t['late_close_'+meal];
+  const prev = fijiDateString(new Date(Date.parse(serviceDate+'T00:00:00Z') - 86400000));
+  const cutoffAt = Date.parse(prev+'T'+cut+':00Z');
+  let lateCloseAt = Date.parse(serviceDate+'T'+lc+':00Z'); if (lateCloseAt < cutoffAt) lateCloseAt = cutoffAt;
+  return { cut: cut, lc: lc, cutoffAt: cutoffAt, lateCloseAt: lateCloseAt };
 }
-/** Breakfast: open &lt;1pm; late 1–6pm; closed after 6pm Fiji (tomorrow service) */
-function breakfastCutoffInfo(now=getFijiNow()) {
-  const h = now.getUTCHours();
-  return {
-    open: h < 13,
-    lateOpen: h >= 13 && h < 18,
-    fullyClosed: h >= 18,
-    serviceDate: fijiDateString(addFijiDays(now,1)),
-    cutoffHour: 13, lateCloseHour: 18,
-    cutoffLabel: '1:00 PM Fiji; late until 6:00 PM',
-    meal:'breakfast', fijiNow: formatFiji(now)
-  };
+function mealPhaseC(meal, serviceDate, now){ const w = mealWindowC(meal, serviceDate), t = (now||getFijiNow()).getTime(); return t < w.cutoffAt ? 'open' : (t < w.lateCloseAt ? 'late' : 'closed'); }
+function mealCutoffInfoC(meal, now){
+  now = now || getFijiNow();
+  const sd = fijiDateString(addFijiDays(now,1)), w = mealWindowC(meal, sd), open = now.getTime() < w.cutoffAt, ph = mealPhaseC(meal, sd, now);
+  return { open: open, lateOpen: !open && ph === 'late', fullyClosed: !open && ph !== 'late', serviceDate: sd, cutoff: w.cut, lateClose: w.lc,
+    cutoffAt: w.cutoffAt, lateCloseAt: w.lateCloseAt, cutoffHour: Math.floor(mtMin(w.cut)/60), lateCloseHour: Math.floor(mtMin(w.lc)/60),
+    cutoffLabel: mtLabel(w.cut)+' Fiji (today for tomorrow\'s '+meal+')', lateCloseLabel: mtLabel(w.lc), meal: meal, fijiNow: formatFiji(now) };
 }
-/** Lunch: closes 1pm Fiji today for tomorrow service (headcount) */
-function lunchCutoffInfo(now=getFijiNow()) {
-  return { open: now.getUTCHours() < 13, serviceDate: fijiDateString(addFijiDays(now,1)),
-    cutoffHour: 13, cutoffLabel: '1:00 PM Fiji (today for tomorrow)', meal:'lunch', fijiNow: formatFiji(now) };
-}
+function dinnerCutoffInfo(now=getFijiNow()) { return mealCutoffInfoC('dinner', now); }
+function breakfastCutoffInfo(now=getFijiNow()) { return mealCutoffInfoC('breakfast', now); }
+function lunchCutoffInfo(now=getFijiNow()) { return mealCutoffInfoC('lunch', now); }
+function dinnerCutLabel(){ return mtLabel(mealTimesNow().dinner_cutoff); }
 
 function defaultDemoDb() {
   return {
@@ -1215,7 +1218,7 @@ function defaultDemoDb() {
     dinnerMenus: (function(){
       const names = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
       const def = {
-    0:['Lamb Neck Curry','Chicken Burger/Chips','Chicken cheese Pizza','Roasted Chicken / Potato Salad / Vegs'],
+    0:['Lamb Neck Curry','Chicken Burger/Chips','Chicken cheese Pizza','Oven Roasted Chicken/ Patatoe Salad/Veggies'],
     1:['Chicken Pizza','Beef Curry / Rice / Chutney','Chicken Burger','Sausages / Potato Salad / Gravy'],
     2:['Oven Roasted Lamb neck / Vegs/ Cassava','Chicken In Black Bean Sauce / Rice','Chicken Pizza'],
     3:['Chicken In Tomato sauce / Rice / Sliced cucumber','Chicken Pizza','Chicken Burger','Beef Soup / Veg / Kumala'],
@@ -1319,7 +1322,7 @@ async function api(action, payload={}) {
     body.requesterEmail = state.user.email;
     body.userEmail = body.userEmail || state.user.email;
   }
-  if (state.token && String(state.token).indexOf('st1.') === 0) body.sessionToken = state.token; // 3.0 station logins only
+  if (state.token && String(state.token).indexOf('v3.') === 0) body.sessionToken = state.token; // 3.0.0 signed session (role pages need it)
   Object.keys(body).forEach(function(key) {
     var v = body[key];
     if (v === undefined || v === null) return;
@@ -1345,7 +1348,7 @@ async function api(action, payload={}) {
   try {
     const json = JSON.parse(text);
     if (!QUEUEABLE[action] && action !== 'login') setDataStatus('fresh');
-    if (json && json.authRequired && state.user && state.user.station) { sessionExpired(); } // only a station login can be signed out remotely
+    if (json && (json.sessionExpired || json.needsSignIn) && state.user && typeof onAuthProblem === 'function') { try { onAuthProblem(json, action); } catch (e) {} }
     return json;
   }
   catch(e) {
@@ -1773,11 +1776,18 @@ function demoApiCore(action, p) {
       demoProcessDinnerWorkflow(db);
       const info = dinnerCutoffInfo();
       const late = !info.open;
-      if (late && !p.allowLate) return Promise.resolve({ success:false, error:'Dinner closed at 8pm Fiji', cutoff:info });
+      if (late && !p.allowLate) return Promise.resolve({ success:false, error:'Dinner closed at '+dinnerCutLabel()+' Fiji', cutoff:info });
       const email = (p.userEmail||state.user.email).toLowerCase();
       const u = db.users.find(x=>x.email===email);
       const status = late ? 'late_pending' : 'pending';
       let o = db.dinnerOrders.find(x=>x.userEmail===email && x.serviceDate===(p.serviceDate||info.serviceDate) && x.status!=='cancelled' && x.status!=='rejected');
+      { // 2.10.2 demo mirror of dinnerChoiceError
+        const sd = p.serviceDate||info.serviceDate, swd = new Date(sd+'T12:00:00Z').getUTCDay();
+        const menu = (db.dinnerMenus||[]).filter(m=>Number(m.weekday)===swd && m.active!==false);
+        const same = o && String(o.mealChoice||'').trim().toLowerCase()===String(p.mealChoice||'').trim().toLowerCase();
+        if (p.mealChoice && !same && !dinnerChoiceOnMenu(p.mealChoice, menu))
+          return Promise.resolve({ success:false, notOnMenu:true, error:'"'+p.mealChoice+'" is not on the '+WEEKDAY_NAMES[swd]+' '+sd+' dinner menu.', cutoff:info });
+      }
       if (o) { const n = demoNoteParam(p, kitchenNoteOf(o)); o.mealChoice=p.mealChoice||o.mealChoice; o.notes=n; o.specialNote=n; o.late=late; o.status=status; }
       else {
         const n = demoNoteParam(p, '');
@@ -1809,7 +1819,7 @@ function demoApiCore(action, p) {
         late = true;
         if (!p.allowLate) return Promise.resolve({ success:false, error:'Use late breakfast request', cutoff:info, needsLate:true });
       } else {
-        return Promise.resolve({ success:false, error:'Breakfast fully closed after 6pm Fiji', cutoff:info });
+        return Promise.resolve({ success:false, error:'Breakfast late requests closed at '+mtLabel(mealTimesNow().late_close_breakfast)+' Fiji', cutoff:info });
       }
       const email = (p.userEmail||state.user.email).toLowerCase();
       const u = db.users.find(x=>x.email===email);
@@ -1923,7 +1933,7 @@ function demoApiCore(action, p) {
       if (meal!=='breakfast' && meal!=='lunch' && meal!=='dinner') return Promise.resolve(fail('meal must be breakfast, lunch, or dinner'));
       const info = meal==='breakfast' ? breakfastCutoffInfo() : (meal==='lunch' ? lunchCutoffInfo() : dinnerCutoffInfo());
       if (meal==='breakfast') {
-        if (!info.open && !info.lateOpen) return Promise.resolve({ success:false, error:'Cannot cancel — breakfast fully closed after 6pm Fiji', cutoff:info });
+        if (!info.open && !info.lateOpen) return Promise.resolve({ success:false, error:'Cannot cancel — breakfast orders closed', cutoff:info });
       } else if (meal==='lunch' && !info.open) {
         return Promise.resolve({ success:false, error:'Cannot cancel after 1pm Fiji cutoff for tomorrow\'s '+meal, cutoff:info });
       }
@@ -2014,6 +2024,23 @@ function demoApiCore(action, p) {
     }
     case 'processDinnerWorkflow': {
       const wf = demoProcessDinnerWorkflow(db); saveDemo(db); return Promise.resolve(ok(wf));
+    }
+    case 'getKitchenDaySummary': {
+      // 2.10.1 demo mirror of Summaries.gs (read only)
+      const now = getFijiNow();
+      const sd = String(p.serviceDate||'').slice(0,10) || fijiDateString(now);
+      const snap = (db.dinnerPrepSnapshots||[]).filter(s=>s.serviceDate===sd).slice(-1)[0]||null;
+      let snapPrep = null; try { snapPrep = snap ? JSON.parse(snap.payloadJson||'null') : null; } catch(_){}
+      const livePrep = demoBuildPrep(db, sd);
+      const useSnap = !!snapPrep && p.source !== 'rows';
+      const days = [];
+      for (let i=-3;i<=1;i++){ const d=fijiDateString(addFijiDays(now,i)); const s=(db.dinnerPrepSnapshots||[]).find(x=>x.serviceDate===d); days.push({ date:d, offset:i, isToday:i===0, dinnerOrders:(db.dinnerOrders||[]).filter(o=>o.serviceDate===d&&o.status!=='cancelled'&&o.status!=='rejected').length, saved:!!s, savedTotal:s?s.totalOrders:null, pdfUrl:'' }); }
+      const hc = (list, isB) => { const orders = demoDecorate(db, (list||[]).filter(o=>o.serviceDate===sd && o.status!=='cancelled')); return { serviceDate:sd, totalCounted: orders.filter(o=>o.status!=='late_pending'&&o.status!=='rejected').length, orders: orders.map(o=>({ id:o.id, userName:o.userName, displayName:o.displayName, department:o.department, timeOrdered:o.createdAt, status:o.status, late:!!o.late, notes:o.notes||'', specialNote:o.specialNote, noteFlag:o.noteFlag })), specialNotes: noteEntriesFrom(isB?'breakfast':'lunch', orders) }; };
+      const tomorrow = fijiDateString(addFijiDays(now,1));
+      return Promise.resolve(ok({ serviceDate:sd, fijiNow:formatFiji(), days,
+        dinner:{ serviceDate:sd, prep: useSnap?snapPrep:livePrep, source: useSnap?'snapshot':'rows', snapshot: snap?{ id:snap.id, serviceDate:sd, generatedAt:snap.generatedAt, autoGenerated:!!snap.autoGenerated, totalOrders:snap.totalOrders, kind:'auto', generatedBy:'', pdfFileId:'', pdfUrl:'' }:null,
+          snapshotReadable: !!snapPrep, liveTotal: livePrep.totalOrders, snapshotTotal: snapPrep?snapPrep.totalOrders:null, stillOpen: sd===tomorrow && now.getUTCHours()<20, autoGeneratedAt830:false },
+        breakfast: hc(db.breakfastOrders, true), lunch: hc(db.lunchOrders, false) }));
     }
     case 'getDinnerPrepList': {
       const wf = demoProcessDinnerWorkflow(db); saveDemo(db);
@@ -4184,7 +4211,7 @@ async function renderKitchen(){
         '<div class="rounded-xl border border-teal-600/40 bg-teal-600/10 p-4 mb-3 text-center">'+
         '<p class="text-[10px] uppercase tracking-wide text-slate-400">Total counted</p>'+
         '<p class="text-3xl font-semibold text-teal-300" data-kit-total="'+meal+'">'+total+'</p>'+
-        '<p class="text-[10px] text-slate-400 mt-1">'+(open?'Open until 1pm Fiji':(lateOpen?'Late until 6pm Fiji':'Closed'))+' · headcount only</p></div>';
+        '<p class="text-[10px] text-slate-400 mt-1">'+(open?'Open until 1pm Fiji':(lateOpen?'Late until '+mtLabel(mealTimesNow().late_close_breakfast)+'':'Closed'))+' · headcount only</p></div>';
       const latePend = (pack.latePending || (pack.orders||[]).filter(o=>o.status==='late_pending') || []);
       if (meal==='breakfast') {
         if (latePend.length) {
@@ -4287,6 +4314,7 @@ async function renderKitchen(){
       headcountBlock('Lunch','lunch',lunchPack,d.lunchDate||(lunchPack.serviceDate||''));
     const kitRoot = ensureKitRoot();
     if (!kitRoot) { toast('Kitchen UI missing','error'); return; }
+    html = kitDaysCardHtml() + html; // 2.10.1: order summaries by date (last 3 days, today, tomorrow)
     html = '<div class="flex justify-end mb-1"><button type="button" id="kit-copy-dinner" class="text-[10px] px-2 py-1 rounded-lg border border-slate-600 text-slate-300"><i class="fa-solid fa-copy mr-1"></i>Copy dinner totals</button></div>' + html;
     kitRoot.innerHTML = html;
     const kitCopy = $('#kit-copy-dinner');
@@ -4420,6 +4448,7 @@ async function renderKitchen(){
       return '<div style="font-family:system-ui,sans-serif;color:#111;background:#fff;max-width:800px;margin:0 auto;padding:16px">'+
         '<div style="text-align:center"><img src="'+logo+'" alt="PCR" style="height:72px;object-fit:contain"/><h1 style="margin:8px 0 4px;font-size:20px">Dinner Prep List — '+esc(data.serviceDate)+' FJT</h1>'+
         (data.autoGeneratedAt830?'<p style="color:#0d9488;font-size:12px">Auto-generated at 8:30pm</p>':'')+
+        (data.sourceNote?'<p style="color:#555;font-size:11px;margin:2px 0">'+esc(data.sourceNote)+'</p>':'')+
         '<p>Total dinner orders: <strong>'+(prep.totalOrders||0)+'</strong></p></div>'+
         notesSectionPrintHtml(noteEntries, false)+
         '<h2 style="font-size:14px;margin-top:16px">Breakdown (sorted by food)</h2>'+breakdown+
@@ -4541,6 +4570,8 @@ async function renderKitchen(){
     if (btnView) btnView.onclick = async () => {
       try { lastPrep = await loadPrep(false); await viewPrepPdf(lastPrep); } catch(e){ toast((e&&e.message)||'Prep failed','error'); }
     };
+    // 2.10.1: order summaries by date — reuses buildPrepHtml / printPrep / downloadPrepPdf / viewPrepPdf above
+    wireKitDays({ printPrep, downloadPrepPdf, viewPrepPdf, buildPrepHtml });
   } catch(e){
     try { stopKitTips(); } catch(_){}
     showKitError((e && e.message) || String(e));
@@ -4562,6 +4593,179 @@ function downloadBlob(name, blob){
 }
 /* ========== Chef printable sheets (C68) ========== */
 const PCR_GOLDEN_LOGO_ABS = 'https://k1rtaaan.github.io/PC-Staff-App-V2-Test/assets/golden-logo.jpg';
+/* ===== 2.10.1: Kitchen — order summaries by date (dinner prep list + breakfast/lunch headcounts) ===== */
+const KIT_DAYS_BACK = 3;
+function kitDayList(){
+  const now = getFijiNow(), today = fijiDateString(now), out = [];
+  for (let i = -KIT_DAYS_BACK; i <= 1; i++) { const d = fijiDateString(addFijiDays(now, i)); out.push({ date:d, offset:i, isToday: d===today }); }
+  return out;
+}
+function kitDayLabel(dateStr, offset){
+  const p = String(dateStr||'').split('-').map(Number);
+  if (p.length !== 3 || !p[0]) return String(dateStr||'');
+  const dt = new Date(Date.UTC(p[0], p[1]-1, p[2]));
+  const wd = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getUTCDay()];
+  const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][p[1]-1];
+  const base = wd+' '+p[2]+' '+mo;
+  if (offset === 0) return base+' · Tonight';
+  if (offset === 1) return base+' · Tomorrow';
+  if (offset === -1) return base+' · Last night';
+  return base;
+}
+function kitDayOffset(dateStr){
+  const l = kitDayList().find(x => x.date === dateStr);
+  return l ? l.offset : null;
+}
+/** Picked service date (default: today = tonight's dinner) */
+function kitSelectedDay(){
+  const list = kitDayList();
+  if (!state.kitDay || !list.some(x => x.date === state.kitDay)) state.kitDay = list.find(x => x.isToday).date;
+  return state.kitDay;
+}
+function kitDaysCardHtml(){
+  const sel = kitSelectedDay();
+  const cache = (state.kitDayCache || {});
+  const chips = kitDayList().map(d => {
+    const c = cache[d.date + '|'];
+    const info = (c && c.days || []).find(x => x.date === d.date) || null;
+    const n = c && c.dinner ? c.dinner.liveTotal : (info ? info.dinnerOrders : null);
+    const on = d.date === sel;
+    return '<button type="button" class="kit-day-chip shrink-0 rounded-xl px-3 py-2 text-xs border min-h-[44px] '+(on?'bg-teal-600/30 border-teal-400 text-teal-100 font-semibold':'border-slate-600 text-slate-300')+'" data-date="'+d.date+'" aria-pressed="'+(on?'true':'false')+'">'+
+      esc(kitDayLabel(d.date, d.offset))+(n!=null?'<span class="block text-[10px] opacity-80">'+n+' dinner</span>':'')+'</button>';
+  }).join('');
+  return '<div class="glass rounded-2xl p-4 border border-teal-500/30" id="kit-days-card">'+
+    '<h3 class="font-semibold text-sm mb-1"><i class="fa-solid fa-calendar-day text-teal-400 mr-2"></i>Order summaries by date</h3>'+
+    '<p class="text-[10px] text-slate-400 mb-2">Dinner date = the night it is served (ordered the day before, until '+dinnerCutLabel()+'). Saved automatically at the cutoff and again after late requests ('+mtLabel(mealTimesNow().late_close_dinner)+').</p>'+
+    '<div class="flex gap-2 overflow-x-auto pb-1" id="kit-days" role="group" aria-label="Pick a service date">'+chips+'</div>'+
+    '<div id="kit-day-panel" class="mt-3"><p class="text-xs text-slate-400">Loading…</p></div></div>';
+}
+function kitDaySourceNote(din){
+  if (!din) return '';
+  if (din.source === 'snapshot' && din.snapshot) return 'Saved summary · '+(din.snapshot.generatedAt||'')+(din.snapshot.generatedBy?' ('+din.snapshot.generatedBy+')':'');
+  return 'Built live from order rows · '+formatFiji();
+}
+function kitDayPanelHtml(data){
+  const din = data.dinner || {}, prep = din.prep || {};
+  const off = kitDayOffset(data.serviceDate);
+  const tally = prep.tally || {};
+  const notes = prepNoteEntries(prep);
+  const nA = notes.filter(e => e.flag === 'allergy').length;
+  const other = din.source === 'snapshot' ? 'rows' : (din.snapshotReadable ? 'snapshot' : '');
+  const diff = (din.snapshotTotal != null && din.liveTotal != null && din.snapshotTotal !== din.liveTotal);
+  const bf = data.breakfast || {}, lu = data.lunch || {};
+  let h = '<div data-kit-day="'+esc(data.serviceDate)+'">'+
+    '<div class="rounded-xl border border-teal-600/40 bg-teal-600/10 p-3 text-center">'+
+    '<p class="text-[10px] uppercase tracking-wide text-slate-400">Dinner · '+esc(kitDayLabel(data.serviceDate, off))+'</p>'+
+    '<p class="text-3xl font-semibold text-teal-300" id="kit-day-total">'+(prep.totalOrders||0)+'</p>'+
+    '<p class="text-[10px] text-slate-400">'+esc(kitDaySourceNote(din))+(din.stillOpen?' · ordering still open until '+dinnerCutLabel():'')+'</p>'+
+    (diff?'<p class="text-[10px] text-amber-300 mt-1">Saved '+din.snapshotTotal+' · live orders now '+din.liveTotal+'</p>':'')+
+    (other?'<button type="button" id="kit-day-src" class="text-[11px] text-teal-300 underline mt-1" data-src="'+other+'">'+(other==='rows'?'Show live orders instead':'Show saved summary')+'</button>':'')+
+    '</div>';
+  const keys = Object.keys(tally).sort((a,b)=>tally[b]-tally[a] || a.localeCompare(b));
+  h += '<div class="mt-2 space-y-1" id="kit-day-tally">'+(keys.length ? keys.map(k => '<div class="flex justify-between text-xs border-b border-slate-700/50 py-1"><span>'+esc(k)+'</span><strong>'+tally[k]+'</strong></div>').join('') : '<p class="text-xs text-slate-500">No dinner orders for this date.</p>')+'</div>';
+  const offM = prep.offMenu || [];
+  if (offM.length) h += '<div class="mt-2 rounded-xl border border-amber-500/50 bg-amber-500/10 p-2 space-y-1" id="kit-day-offmenu"><p class="text-[11px] text-amber-200 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-1"></i>'+offM.length+' order'+(offM.length===1?'':'s')+' not on this day\'s menu</p>'+
+    offM.map(o => '<div class="flex items-center justify-between gap-2 text-[11px] text-amber-100"><span class="min-w-0 truncate">'+esc(o.name)+' · '+esc(o.department||'')+' — '+esc(o.dish)+'</span>'+
+      ((typeof v3CanChef === 'function' && v3CanChef()) ? '<button type="button" class="kit-offmenu-cancel shrink-0 rounded-lg px-2 py-1 border border-amber-400/50 text-amber-100" data-id="'+esc(o.id)+'" data-dish="'+esc(o.dish)+'" data-date="'+esc(data.serviceDate)+'">Cancel &amp; notify</button>' : '')+'</div>').join('')+'</div>';
+  h += '<p class="text-[11px] mt-2 '+(nA?'text-red-300':'text-slate-400')+'"><i class="fa-solid fa-triangle-exclamation mr-1"></i>'+notes.length+' allergy / special note'+(notes.length===1?'':'s')+(nA?' · '+nA+' ALLERGY':'')+'</p>';
+  h += '<div class="grid grid-cols-2 gap-2 mt-3">'+
+    '<button type="button" id="kit-day-print" class="btn-primary rounded-xl py-2 text-sm text-white font-semibold min-h-[44px]"><i class="fa-solid fa-print mr-1"></i>Print</button>'+
+    '<button type="button" id="kit-day-pdf" class="rounded-xl py-2 text-sm text-white font-semibold min-h-[44px]" style="background:linear-gradient(135deg,#0d9488,#0f766e)"><i class="fa-solid fa-file-pdf mr-1"></i>Download PDF</button>'+
+    '<button type="button" id="kit-day-view" class="glass rounded-xl py-2 text-xs min-h-[40px]">View PDF</button>'+
+    ((din.snapshot && din.snapshot.pdfFileId)?'<button type="button" id="kit-day-saved" class="glass rounded-xl py-2 text-xs min-h-[40px]">Saved summary PDF</button>':'<span class="text-[10px] text-slate-500 self-center text-center">'+(din.snapshot?'Saved summary ✓':'No saved summary — live')+'</span>')+
+    '</div>';
+  h += '<div class="grid grid-cols-2 gap-2 mt-3">'+
+    ['breakfast','lunch'].map(m => { const pk = m==='breakfast'?bf:lu; return '<div class="rounded-xl border border-slate-600/60 p-2 text-center"><p class="text-[10px] uppercase text-slate-400">'+(m==='breakfast'?'Breakfast':'Lunch')+'</p>'+
+      '<p class="text-xl font-semibold text-sand-100" data-kit-day-count="'+m+'">'+(pk.totalCounted||0)+'</p>'+
+      '<div class="flex justify-center gap-3 mt-1"><button type="button" class="kit-day-hc-print text-[11px] text-teal-300 px-1 py-1" data-meal="'+m+'">Print</button><button type="button" class="kit-day-hc-pdf text-[11px] text-teal-300 px-1 py-1" data-meal="'+m+'">PDF</button></div></div>'; }).join('')+
+    '</div></div>';
+  return h;
+}
+function kitPrepDataFor(data){
+  const din = (data && data.dinner) || {};
+  return { serviceDate: data.serviceDate, prep: din.prep || {}, autoGeneratedAt830: false, sourceNote: kitDaySourceNote(din) };
+}
+function base64ToBlob(b64, type){
+  const bin = atob(b64), arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: type || 'application/pdf' });
+}
+function wireKitDays(fx){
+  const panel = $('#kit-day-panel');
+  if (!panel) return;
+  state.kitDayCache = state.kitDayCache || {};
+  let current = null;
+  function paintChips(){
+    const sel = kitSelectedDay();
+    $$('.kit-day-chip').forEach(b => {
+      const on = b.dataset.date === sel;
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.className = 'kit-day-chip shrink-0 rounded-xl px-3 py-2 text-xs border min-h-[44px] '+(on?'bg-teal-600/30 border-teal-400 text-teal-100 font-semibold':'border-slate-600 text-slate-300');
+    });
+    // keep the picked chip in view inside the horizontal row (no page scroll)
+    try {
+      const row = $('#kit-days'), btn = document.querySelector('.kit-day-chip[data-date="'+sel+'"]');
+      if (row && btn) row.scrollLeft = Math.max(0, btn.offsetLeft - row.offsetLeft - (row.clientWidth - btn.offsetWidth) / 2);
+    } catch (_){}
+  }
+  function paintCounts(data){
+    (data.days||[]).forEach(d => {
+      const b = document.querySelector('.kit-day-chip[data-date="'+d.date+'"]');
+      if (!b) return;
+      let sp = b.querySelector('span');
+      if (!sp) { sp = document.createElement('span'); sp.className = 'block text-[10px] opacity-80'; b.appendChild(sp); }
+      sp.textContent = d.dinnerOrders+' dinner'+(d.saved?' · saved':'');
+    });
+  }
+  function show(data){
+    current = data;
+    panel.innerHTML = kitDayPanelHtml(data);
+    paintCounts(data);
+    const pd = () => kitPrepDataFor(current);
+    const on = (id, fn) => { const el = $('#'+id); if (el) el.onclick = fn; };
+    on('kit-day-print', () => fx.printPrep(pd()));
+    on('kit-day-pdf', () => fx.downloadPrepPdf(pd()));
+    on('kit-day-view', () => fx.viewPrepPdf(pd()));
+    on('kit-day-src', (ev) => load(current.serviceDate, ev.currentTarget.dataset.src));
+    on('kit-day-saved', async () => {
+      toast('Fetching saved PDF…');
+      try {
+        const r = await api('getSavedSummaryPdf', { serviceDate: current.serviceDate });
+        if (!r || !r.success) throw new Error((r && r.error) || 'Saved PDF not available');
+        downloadBlob(r.data.name || ('dinner-summary-'+current.serviceDate+'.pdf'), base64ToBlob(r.data.base64));
+        toast('Downloaded saved PDF','ok');
+      } catch (e) { toast((e && e.message) || 'Saved PDF failed','error'); }
+    });
+    $$('.kit-day-hc-print').forEach(b => b.onclick = () => {
+      const m = b.dataset.meal; const html = buildHeadcountOrderSheetHtml(m==='breakfast'?'Breakfast':'Lunch', current[m] || {});
+      const w = window.open('', '_blank');
+      if (w) { w.document.write('<!doctype html><html><head><title>'+esc(m)+' order list</title></head><body>'+html+'</body></html>'); w.document.close(); w.focus(); setTimeout(()=>w.print(), 350); }
+      else toast('Allow popups to print','error');
+    });
+    $$('.kit-day-hc-pdf').forEach(b => b.onclick = () => {
+      const m = b.dataset.meal; const d = current[m] || {};
+      downloadChefPdf(buildHeadcountOrderSheetHtml(m==='breakfast'?'Breakfast':'Lunch', d), m+'-order-'+(d.serviceDate||current.serviceDate)+'.pdf');
+    });
+  }
+  async function load(date, source){
+    state.kitDay = date;
+    paintChips();
+    const key = date + '|' + (source || '');
+    const cached = state.kitDayCache[key];
+    if (cached) show(cached); else panel.innerHTML = '<p class="text-xs text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-1"></i>Loading '+esc(kitDayLabel(date, kitDayOffset(date)))+'…</p>';
+    try {
+      const r = await api('getKitchenDaySummary', source ? { serviceDate: date, source } : { serviceDate: date });
+      if (!r || !r.success || !r.data) throw new Error((r && r.error) || 'Could not load summary');
+      state.kitDayCache[key] = r.data;
+      if (state.kitDay === date && $('#kit-day-panel')) show(r.data);
+    } catch (e) {
+      if (!cached && state.kitDay === date) panel.innerHTML = '<p class="text-xs text-rose-300">'+esc((e && e.message) || 'Could not load summary')+' <button type="button" id="kit-day-retry" class="text-teal-300 underline ml-1">Retry</button></p>';
+      const rt = $('#kit-day-retry'); if (rt) rt.onclick = () => load(date, source);
+    }
+  }
+  $$('.kit-day-chip').forEach(b => b.onclick = () => load(b.dataset.date));
+  load(kitSelectedDay());
+}
 function goldenLogoAbsUrl(){
   try {
     if (typeof location !== 'undefined' && location.href && !/^blob:/.test(location.href) && location.protocol !== 'about:') {
@@ -5444,7 +5648,7 @@ function mealCutoffOneLiner(meal, info){
   }
   if (meal==='breakfast') {
     if (info.open) return 'Breakfast for '+day+(svc?' ('+svc+')':'')+' · open until 1:00pm today';
-    if (info.lateOpen) return 'Breakfast for '+day+' · late until 6:00pm today (needs chef OK)';
+    if (info.lateOpen) return 'Breakfast for '+day+' · late request until '+mtLabel(mealTimesNow().late_close_breakfast)+'';
     return 'Breakfast for '+day+' · closed after 6:00pm Fiji';
   }
   if (meal==='lunch') {
@@ -5454,7 +5658,7 @@ function mealCutoffOneLiner(meal, info){
   return '';
 }
 function diOpenLine(info, day, svc){
-  if (info.open) return 'Dinner for '+day+(svc?' ('+svc+')':'')+' · open until 8:00pm today';
+  if (info.open) return 'Dinner for '+day+(svc?' ('+svc+')':'')+' · open until '+dinnerCutLabel()+' today';
   return 'Dinner for '+day+' · closed — late requests need chef OK';
 }
 function loadLastDinner(){ try { return JSON.parse(localStorage.getItem(LS_LAST_DINNER)||'null'); } catch(e){ return null; } }
@@ -5528,7 +5732,7 @@ function renderHomeV2(){
           '<p class="text-[9px] uppercase tracking-wide text-slate-400">Breakfast</p>'+
           '<p class="text-sm font-medium mt-1">'+(bi.open?'<span class="text-teal-400">Open</span>':(bi.lateOpen?'<span class="text-orange-300">Late</span>':'<span class="text-amber-400">Closed</span>'))+'</p>'+
           '<p class="text-[9px] text-slate-500">'+bi.serviceDate+'</p>'+
-          '<p class="text-[9px] text-slate-500">'+(bi.lateOpen?'until 6pm':'1pm Fiji')+'</p></button>'+
+          '<p class="text-[9px] text-slate-500">'+(bi.lateOpen?'late until '+mtLabel(mealTimesNow().late_close_breakfast)+'':'1pm Fiji')+'</p></button>'+
         '<button type="button" onclick="navigate(\'lunch\')" class="meal-card-btn ui-card glass rounded-xl p-2.5 text-left '+(li.open?'meal-open-glow border-teal-600/40':'')+'">'+
           '<p class="text-[9px] uppercase tracking-wide text-slate-400">Lunch</p>'+
           '<p class="text-sm font-medium mt-1">'+(li.open?'<span class="text-teal-400">Open</span>':'<span class="text-amber-400">Closed</span>')+'</p>'+
@@ -5538,7 +5742,7 @@ function renderHomeV2(){
           '<p class="text-[9px] uppercase tracking-wide text-slate-400">Dinner</p>'+
           '<p class="text-sm font-medium mt-1">'+(di.open?'<span class="text-teal-400">Open</span>':'<span class="text-amber-400">Closed</span>')+'</p>'+
           '<p class="text-[9px] text-slate-500">'+di.serviceDate+'</p>'+
-          '<p class="text-[9px] text-slate-500">8pm Fiji</p></button></div>'+
+          '<p class="text-[9px] text-slate-500">'+dinnerCutLabel()+' Fiji</p></button></div>'+
       '<div class="grid grid-cols-2 gap-2" id="home-quick-tiles">'+tiles+'</div>'+
       '<div class="ui-card glass rounded-xl p-3" id="home-reminders-card">'+
         '<div class="flex items-center justify-between mb-1.5">'+
@@ -5677,6 +5881,13 @@ function paintDailyOps(d, box){
     };
   }
 }
+/** 3.0.0 (2.10.2 fix): true if a dish name is one of the service-date menu items (empty menu = anything goes). */
+function dinnerChoiceOnMenu(choice, menuItems){
+  const n = x => String(x||'').replace(/\s+/g,' ').trim().toLowerCase();
+  if (!choice) return false;
+  if (!menuItems || !menuItems.length) return true;
+  return menuItems.some(it => n(it && (it.itemName || it)) === n(choice));
+}
 async function renderDinnerV2(){
   const di = dinnerCutoffInfo();
   state.mealPill = 'dinner';
@@ -5701,7 +5912,8 @@ async function renderDinnerV2(){
     const cur = pickActiveOrder(myDinner); // C100: prefer active row over an older cancelled one
     const lateChip = cur ? lateStateChip(cur.status) : '';
     const statusHtml = cur ? ('<p class="text-xs text-sand-200/70">Your order: <strong>'+esc(cur.mealChoice)+'</strong> '+statusBadge(cur.status)+(cur.late?' <span class="text-amber-400">LATE</span>':'')+(lateChip?' '+lateChip:'')+'</p>') : '';
-    const last = loadLastDinner();
+    const lastRaw = loadLastDinner(); // only offer the phone's last dish if it is on THIS service date's menu
+    const last = (lastRaw && dinnerChoiceOnMenu(lastRaw.mealChoice, menuItems)) ? lastRaw : null;
     $('#main-content').innerHTML = '<div class="fade-in max-w-lg mx-auto space-y-4" id="dinner-root">'+
       mealPillsHtml('dinner')+queueHostHtml('dinner')+
       '<div class="glass rounded-2xl p-4 space-y-3"><div><h3 class="font-semibold"><i class="fa-solid fa-moon text-teal-400 mr-2"></i>Dinner</h3>'+
@@ -5715,7 +5927,7 @@ async function renderDinnerV2(){
       (last && last.mealChoice?'<button type="button" id="btn-dinner-same" class="w-full rounded-xl py-2 text-xs text-teal-300 border border-teal-500/35">Same as last time ('+esc(last.mealChoice)+')</button>':'')+
       '<button id="btn-dinner" class="btn-primary w-full rounded-xl py-3.5 text-base font-semibold text-white min-h-[48px]">'+(di.open?'Book dinner':'Submit late dinner request')+'</button>'+
       (cur && cur.status!=='cancelled' && cur.status!=='rejected'?'<button id="btn-dinner-cancel" class="w-full rounded-xl py-2 text-xs text-amber-300 border border-amber-500/30">Cancel dinner</button>':'')+
-      (!di.open?'<p class="text-[10px] text-amber-300/80">For staff who missed the 8pm Fiji cutoff for tomorrow\'s dinner. Late requests need chef/admin approval.</p>':'')+
+      (!di.open?'<p class="text-[10px] text-amber-300/80">For staff who missed the '+dinnerCutLabel()+' Fiji cutoff for tomorrow\'s dinner. Late requests are approved automatically at '+mtLabel(mealTimesNow().late_close_dinner)+'.</p>':'')+
       '</div></div>';
     if (cur && cur.mealChoice) {
       const sel = $('#dinner-choice');
@@ -5850,7 +6062,7 @@ async function renderBreakfastV2(){
         formHtml =
           '<div class="rounded-xl border border-orange-500/35 bg-orange-500/10 p-3 space-y-1">'+
           '<p class="text-sm font-medium text-orange-300"><i class="fa-solid fa-hourglass-half mr-1"></i>Waiting approval from chef</p>'+
-          '<p class="text-[10px] text-orange-200/80">Late breakfast request submitted. Chef/admin will approve before 6pm Fiji.</p></div>'+
+          '<p class="text-[10px] text-orange-200/80">Late breakfast request submitted — approved automatically at '+mtLabel(mealTimesNow().late_close_breakfast)+'.</p></div>'+
           '<button id="btn-breakfast-cancel" class="w-full rounded-xl py-2 text-xs text-amber-300 border border-amber-500/30">Cancel late request</button>';
       } else if (counted) {
         formHtml = '<p class="text-xs text-teal-300/90"><i class="fa-solid fa-check mr-1"></i>You are counted in for breakfast'+(st==='late_approved'?' (late approved)':'')+'</p>';
@@ -5864,19 +6076,19 @@ async function renderBreakfastV2(){
         formHtml =
           '<div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2">'+
           '<p class="text-sm font-medium text-amber-300"><i class="fa-solid fa-clock mr-1"></i>Normal breakfast closed (1pm)</p>'+
-          '<p class="text-[10px] text-amber-200/80">Late requests open until 6:00 PM Fiji — needs chef approval.</p>'+
+          '<p class="text-[10px] text-amber-200/80">Late requests open until '+mtLabel(mealTimesNow().late_close_breakfast)+'.</p>'+
           mealNoteInputHtml('bf-note', '')+
           '<button id="btn-breakfast-late" class="btn-primary w-full rounded-xl py-3.5 text-base font-semibold text-white min-h-[48px]">Request late breakfast</button></div>';
       }
     } else {
       formHtml =
         '<div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-1">'+
-        '<p class="text-sm font-medium text-amber-300"><i class="fa-solid fa-lock mr-1"></i>Breakfast fully closed after 6pm Fiji</p>'+
+        '<p class="text-sm font-medium text-amber-300"><i class="fa-solid fa-lock mr-1"></i>Breakfast late requests closed ('+mtLabel(mealTimesNow().late_close_breakfast)+')</p>'+
         (declined?'<p class="text-xs text-rose-300 mt-1">order declined please see hod or chef</p>':'')+
         '<p class="text-[10px] text-amber-200/80">No new late requests. See HOD or chef if needed.</p></div>';
     }
     const statusLine = bi.open ? 'Open — count in before 1:00 PM Fiji'
-      : (bi.lateOpen ? 'Late window — until 6:00 PM Fiji' : 'Fully closed');
+      : (bi.lateOpen ? 'Late window — until '+mtLabel(mealTimesNow().late_close_breakfast)+'' : 'Fully closed');
     $('#main-content').innerHTML = '<div class="fade-in max-w-lg mx-auto space-y-4" id="breakfast-root">'+
       mealPillsHtml('breakfast')+queueHostHtml('breakfast')+
       '<div class="glass rounded-2xl p-4 space-y-3"><div><h3 class="font-semibold"><i class="fa-solid fa-mug-saucer text-teal-400 mr-2"></i>Breakfast</h3>'+
