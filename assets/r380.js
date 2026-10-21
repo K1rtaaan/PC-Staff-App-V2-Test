@@ -184,3 +184,23 @@ async function r38LoadDash(dept){
     return r;
   };
 })();
+/* ---------- 3.8.0 speed: app-open prefetch — the small reads every screen asks for a few seconds after opening go out
+   together with the bootstrap as ONE batch; each prefetched answer is used once (within 20 s), then normal calls resume. ---------- */
+(function(){
+  if (typeof api !== 'function') return;
+  const baseApi = api, pre = {};
+  const key = function(a, p){ return a + '|' + JSON.stringify(p || {}); };
+  function prefetch(){
+    if (!state.user || state.demo) return;
+    const list = [['getDepartments', {}], ['getMyNotifications', {}], ['getPushConfig', {}]];
+    if (!v3IsSuper()) list.push(['getDinnerRatingPrompt', {}]);
+    if (r38DashAllowed() && !v3Has('admin')) list.push(['getHodDashboard', { department: state.user.department || '' }]);
+    list.forEach(function(x){ const k = key(x[0], x[1]); if (!pre[k]) pre[k] = { at: Date.now(), pr: baseApi(x[0], x[1]) }; });
+  }
+  api = function(a, p){
+    if (a === 'getBootstrap') { try { prefetch(); } catch (e) {} }
+    const k = key(a, p), hit = pre[k];
+    if (hit) { delete pre[k]; if (Date.now() - hit.at < 20000) return hit.pr; }
+    return baseApi(a, p);
+  };
+})();
